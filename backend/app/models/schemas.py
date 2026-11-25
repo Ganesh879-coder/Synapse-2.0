@@ -152,6 +152,33 @@ class AnalyzerOutput(BaseModel):
     signals: list[Signal] = Field(default_factory=list)
 
 
+class ScoreContribution(BaseModel):
+    """Single signal or check contribution to the final risk score."""
+
+    signal: str
+    label: str
+    contribution: float = Field(ge=0.0, le=100.0)
+
+
+class ExplanationSummary(BaseModel):
+    """Plain-English summary, reasons, next actions, and disclaimer."""
+
+    verdict: str
+    top_reasons: list[str] = Field(default_factory=list)
+    next_actions: list[str] = Field(default_factory=list)
+    disclaimer: str
+
+
+class PageArtifact(BaseModel):
+    """Metadata and URLs for a rendered document page and its heatmap."""
+
+    page: int = Field(ge=1)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    image_url: str
+    heatmap_url: str | None = None
+
+
 class AnalysisResult(BaseModel):
     """Top-level response contract returned by the analysis pipeline and API."""
 
@@ -166,3 +193,27 @@ class AnalysisResult(BaseModel):
     checks: list[CheckResult] = Field(default_factory=list)
     heatmap_url: str | None = None
     processing_ms: int = Field(ge=0)
+    pages: list[PageArtifact] = Field(default_factory=list)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    score_breakdown: list[ScoreContribution] = Field(default_factory=list)
+    summary: ExplanationSummary | None = None
+
+
+JobStatus = Literal["queued", "processing", "done", "failed"]
+PipelineStage = Literal["reading", "edits", "numbers", "scoring"]
+
+
+class AnalyzeQueuedResponse(BaseModel):
+    """Immediate response returned by POST /api/analyze."""
+
+    doc_id: str
+    status: Literal["queued"] = "queued"
+
+
+class AnalysisStatusResponse(BaseModel):
+    """Polling response returned by GET /api/analysis/{doc_id}."""
+
+    status: JobStatus
+    stage: PipelineStage | None = None
+    result: AnalysisResult | None = None
+    error: str | None = None

@@ -1,0 +1,97 @@
+{
+  "doc_id": "mock_tampered_upi",
+  "doc_type": "BANK_UPI_STATEMENT",
+  "risk_score": 79,
+  "risk_level": "HIGH",
+  "confidence": 0.86,
+  "verdict": "Indicators suggest possible tampering on this UPI transaction statement. A transaction row's date disagrees with the date encoded inside its UPI transaction ID, and visual patching is visible over the payment amount.",
+  "findings": [
+    {
+      "id": "f_upi_date",
+      "category": "consistency",
+      "severity": "high",
+      "title": "Transaction date disagrees with reference ID",
+      "plain_explanation": "The date printed on a transaction row does not match the date embedded inside its UPI transaction ID.",
+      "technical_detail": "UPI ID 'T26111011223344' encodes 10/11/2026, while row date reads '20/11/2026'.",
+      "evidence_region_ids": ["reg_upi_row"]
+    },
+    {
+      "id": "f_upi_amount_patch",
+      "category": "visual",
+      "severity": "high",
+      "title": "Possible edit over transaction amount",
+      "plain_explanation": "The background and edge sharpness around the INR 45,000.00 amount differ from neighbouring rows, suggesting a possible edit.",
+      "technical_detail": "text_patch detector flagged amount token (score 0.84) with elevated background color delta.",
+      "evidence_region_ids": ["reg_upi_amount"]
+    }
+  ],
+  "regions": [
+    {
+      "id": "reg_upi_row",
+      "page": 1,
+      "bbox": [0.08, 0.36, 0.64, 0.43],
+      "score": 0.76,
+      "reason": "Row date (20/11/2026) does not match date inside UPI ID (T261110...)."
+    },
+    {
+      "id": "reg_upi_amount",
+      "page": 1,
+      "bbox": [0.70, 0.36, 0.92, 0.43],
+      "score": 0.84,
+      "reason": "Possible edit: amount shading and stroke thickness differ from neighbouring rows."
+    }
+  ],
+  "extracted_fields": {
+    "statement_period": { "value": { "start": "01/11/2026", "end": "30/11/2026" }, "page": 1, "bbox": [0.08, 0.18, 0.65, 0.22] },
+    "transactions": { "value": "7 rows extracted", "page": 1, "bbox": [0.08, 0.36, 0.92, 0.43] }
+  },
+  "checks": [
+    {
+      "name": "bank:upi_tx_date_match",
+      "status": "fail",
+      "detail": "UPI transaction ID 'T26111011223344' encodes 10/11/2026, which does not match row date 20/11/2026."
+    },
+    {
+      "name": "bank:date_ordering",
+      "status": "pass",
+      "detail": "Transaction dates are in consistent descending order."
+    },
+    {
+      "name": "bank:statement_period",
+      "status": "pass",
+      "detail": "All transaction dates fall within the statement period."
+    },
+    {
+      "name": "bank:pagination",
+      "status": "pass",
+      "detail": "Page numbering ('Page 1 of 9') is consistent."
+    }
+  ],
+  "score_breakdown": [
+    { "signal": "rules:bank:upi_tx_date_match", "label": "UPI ID vs. row date mismatch", "contribution": 42.5 },
+    { "signal": "forensics:text_patch", "label": "Localized text-patch anomaly", "contribution": 36.5 }
+  ],
+  "summary": {
+    "verdict": "Indicators suggest possible tampering on this UPI transaction statement. A transaction row's date disagrees with the date encoded inside its UPI transaction ID, and visual patching is visible over the payment amount.",
+    "top_reasons": [
+      "The date on row 1 (20/11/2026) does not match the date encoded inside its UPI transaction ID (10/11/2026).",
+      "Visual properties around the INR 45,000.00 amount differ from neighbouring rows."
+    ],
+    "next_actions": [
+      "Confirm bank/UPI details by calling a number you already trust and verify the UTR in your bank portal.",
+      "Ask the issuer for the original unmodified PDF rather than a re-saved or screenshotted copy."
+    ],
+    "disclaimer": "This automated assessment highlights statistical and structural indicators only. It does not constitute legal proof of forgery or authenticity; always perform independent verification before taking action."
+  },
+  "pages": [
+    {
+      "page": 1,
+      "width": 700,
+      "height": 880,
+      "image_url": "/mock/images/tampered_upi.png",
+      "heatmap_url": "/mock/images/tampered_upi_heatmap.png"
+    }
+  ],
+  "heatmap_url": "/mock/images/tampered_upi_heatmap.png",
+  "processing_ms": 530
+}

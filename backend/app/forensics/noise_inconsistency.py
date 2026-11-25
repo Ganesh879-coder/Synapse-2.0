@@ -40,11 +40,14 @@ def analyze_noise_inconsistency(
 
     median_var = float(np.median(block_vars))
     mad = float(np.median(np.abs(block_vars - median_var)))
-    if mad < 1e-3 and float(np.max(block_vars) - median_var) < 8.0:
+    # On flat digital screenshots/PDFs (median_var < 1.2), text edges create high block variance;
+    # require extreme noise deviation rather than flagging normal rendered text.
+    min_delta = 140.0 if median_var < 1.2 else 20.0
+    if mad < 1e-3 and float(np.max(block_vars) - median_var) < min_delta:
         return [], 0.0
 
-    robust_z = np.abs(block_vars - median_var) / max(mad * 1.4826, 2.5)
-    flagged = robust_z >= 4.0
+    robust_z = np.abs(block_vars - median_var) / max(mad * 1.4826, 4.0)
+    flagged = (robust_z >= 5.5) & (np.abs(block_vars - median_var) >= min_delta)
     if not np.any(flagged):
         return [], 0.0
 

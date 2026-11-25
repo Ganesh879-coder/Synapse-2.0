@@ -25,7 +25,7 @@ def test_rules_analyzer_returns_empty_output(tmp_path: Path) -> None:
     assert result.signals == []
 
 
-def test_classify_analyzer_returns_empty_output(tmp_path: Path) -> None:
+def test_classify_analyzer_sets_doc_type(tmp_path: Path) -> None:
     page_img = tmp_path / "page_1.png"
     page_img.write_bytes(b"stub")
     ctx = AnalysisContext(
@@ -39,3 +39,4 @@ def test_classify_analyzer_returns_empty_output(tmp_path: Path) -> None:
     assert isinstance(result, AnalyzerOutput)
     assert result.analyzer_name == "classify"
     assert result.signals == []
+    assert ctx.doc_type == "UNKNOWN"

@@ -125,16 +125,22 @@ def test_health_and_analyze_endpoints(tmp_path: Path) -> None:
             data={"doc_type": "invoice"},
         )
         assert png_resp.status_code == 200
-        body = png_resp.json()
-        assert body["risk_score"] == 0
-        assert body["risk_level"] == "LOW"
-        assert "doc_id" in body
+        queued = png_resp.json()
+        assert queued["status"] == "queued"
+        assert "doc_id" in queued
+
+        status_resp = client.get(f"/api/analysis/{queued['doc_id']}")
+        assert status_resp.status_code == 200
+        assert status_resp.json()["status"] == "done"
+        assert status_resp.json()["result"]["risk_score"] == 0
+        assert status_resp.json()["result"]["risk_level"] == "LOW"
 
         pdf_resp = client.post(
             "/api/analyze",
             files={"file": ("sample.pdf", _make_pdf_bytes(), "application/pdf")},
         )
         assert pdf_resp.status_code == 200
+        assert pdf_resp.json()["status"] == "queued"
 
         bad_resp = client.post(
             "/api/analyze",

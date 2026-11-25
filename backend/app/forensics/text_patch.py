@@ -134,11 +134,13 @@ def analyze_text_patch(
                 float(stroke_z[idx]) * 0.9,
                 float(height_z[idx]) * 0.9,
             )
-            if combined < 3.0:
+            if combined < 3.8:
                 continue
 
             raw_score = min(1.0, combined / 6.5)
-            scaled = scale_confidence(raw_score, quality, is_screenshot_like)
+            scaled = scale_confidence(
+                raw_score, quality, is_screenshot_like, screenshot_sensitive=True
+            )
             flagged_regions.append(
                 Region(
                     id=uuid.uuid4().hex[:12],

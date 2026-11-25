@@ -1,0 +1,78 @@
+{
+  "doc_id": "mock_noisy_screenshot",
+  "doc_type": "PAYMENT_RECEIPT",
+  "risk_score": 42,
+  "risk_level": "MEDIUM",
+  "confidence": 0.45,
+  "verdict": "Minor visual irregularities were observed, though low image quality and screenshot compression limit this check. All extracted receipt numbers and amounts appear internally consistent, so manual verification is recommended.",
+  "findings": [
+    {
+      "id": "f_ss_noise",
+      "category": "visual",
+      "severity": "low",
+      "title": "Minor compression & noise variation",
+      "plain_explanation": "A small region near the receipt header shows slightly different compression texture, which often happens in mobile screenshots.",
+      "technical_detail": "Weak noise variance signal (score 0.42) attenuated by screenshot/quality gating (confidence 0.45).",
+      "evidence_region_ids": ["reg_ss_header"]
+    }
+  ],
+  "regions": [
+    {
+      "id": "reg_ss_header",
+      "page": 1,
+      "bbox": [0.18, 0.14, 0.78, 0.24],
+      "score": 0.42,
+      "reason": "Weak signal: mild compression difference (common in mobile screenshots)."
+    }
+  ],
+  "extracted_fields": {
+    "receipt_no": { "value": "KENV649407342", "page": 1, "bbox": [0.35, 0.28, 0.72, 0.33] },
+    "cet_no": { "value": "NV649", "page": 1, "bbox": [0.35, 0.35, 0.60, 0.40] },
+    "amount": { "value": 121610.0, "page": 1, "bbox": [0.35, 0.42, 0.62, 0.47] },
+    "date": { "value": "18/11/2026", "page": 1, "bbox": [0.35, 0.49, 0.60, 0.54] }
+  },
+  "checks": [
+    {
+      "name": "receipt:amount_positive",
+      "status": "pass",
+      "detail": "Payment amount (121,610.00) is valid and positive."
+    },
+    {
+      "name": "receipt:number_structure",
+      "status": "pass",
+      "detail": "Receipt number structure is valid."
+    },
+    {
+      "name": "receipt:repeated_identifier",
+      "status": "pass",
+      "detail": "CET No. (NV649) matches the identifier inside Receipt No. (KENV649407342)."
+    }
+  ],
+  "score_breakdown": [
+    { "signal": "forensics:noise", "label": "Local noise variance anomaly", "contribution": 24.0 },
+    { "signal": "forensics:metadata", "label": "Screenshot compression indicator", "contribution": 18.0 }
+  ],
+  "summary": {
+    "verdict": "Minor visual irregularities were observed, though low image quality and screenshot compression limit this check. All extracted receipt numbers and amounts appear internally consistent, so manual verification is recommended.",
+    "top_reasons": [
+      "Mild compression variation near the header (common in mobile screenshots).",
+      "All receipt identifiers and payment amounts are internally consistent."
+    ],
+    "next_actions": [
+      "Cross-check the receipt number and reference/CET ID on the issuing authority's official portal.",
+      "Ask the issuer for the original unmodified PDF or raw photograph rather than a screenshotted copy."
+    ],
+    "disclaimer": "This automated assessment highlights statistical and structural indicators only. It does not constitute legal proof of forgery or authenticity; always perform independent verification before taking action."
+  },
+  "pages": [
+    {
+      "page": 1,
+      "width": 640,
+      "height": 820,
+      "image_url": "/mock/images/noisy_screenshot.png",
+      "heatmap_url": "/mock/images/noisy_screenshot_heatmap.png"
+    }
+  ],
+  "heatmap_url": "/mock/images/noisy_screenshot_heatmap.png",
+  "processing_ms": 390
+}

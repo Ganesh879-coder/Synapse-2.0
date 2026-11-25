@@ -22,7 +22,7 @@ def analyze_jpeg_ghost(
     quality: float = 1.0,
 ) -> tuple[list[Region], float]:
     """Detect localized double-JPEG compression inconsistencies across quality levels."""
-    if is_screenshot_like and mime == "image/png":
+    if is_screenshot_like:
         return [], 0.0
 
     bgr = load_page_bgr(page)
@@ -46,11 +46,11 @@ def analyze_jpeg_ghost(
     spread = np.max(stacked, axis=0) - np.min(stacked, axis=0)
     median_spread = float(np.median(spread))
     mad_spread = float(np.median(np.abs(spread - median_spread)))
-    if float(np.max(spread)) < 4.0:
+    if float(np.max(spread)) < 5.5:
         return [], 0.0
 
-    z_map = (spread - median_spread) / max(mad_spread * 1.4826, 1.0)
-    mask = z_map >= 3.0
+    z_map = (spread - median_spread) / max(mad_spread * 1.4826, 1.2)
+    mask = z_map >= 3.3
     if not np.any(mask):
         return [], 0.0
 

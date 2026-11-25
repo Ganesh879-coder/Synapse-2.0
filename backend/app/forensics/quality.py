@@ -24,13 +24,21 @@ def estimate_page_quality(image_bgr: np.ndarray, mime: str) -> tuple[float, bool
     noise_mad = float(np.median(residual))
     noise_penalty = min(0.5, max(0.0, (noise_mad - 4.0) / 20.0))
 
-    quality = max(0.05, min(1.0, 0.55 * sharpness + 0.45 * contrast - noise_penalty))
+    # Penalize low-resolution / heavily compressed images (e.g. 480x640 WhatsApp/web JPEGs).
+    h, w = image_bgr.shape[:2]
+    res_penalty = 0.25 if min(h, w) <= 600 else 0.0
+    quality = max(0.05, min(1.0, 0.55 * sharpness + 0.45 * contrast - noise_penalty - res_penalty))
 
-    # Screenshot-like heuristic: PNG with large flat-color regions and crisp edges.
+    # Screenshot-like / flat-white-background heuristic (even when saved as JPEG).
     edges = cv2.Canny(gray, 80, 160)
     flat_ratio = float(np.mean(residual < 1.0))
+    white_ratio = float(np.mean(gray > 235))
     edge_density = float(np.mean(edges > 0))
-    is_screenshot_like = mime == "image/png" and flat_ratio > 0.78 and edge_density > 0.01
+    is_screenshot_like = (
+        (mime == "image/png" and flat_ratio > 0.78 and edge_density > 0.01)
+        or (flat_ratio > 0.80 and white_ratio > 0.65 and edge_density > 0.008)
+        or (flat_ratio > 0.85 and white_ratio > 0.72)
+    )
 
     return round(quality, 4), is_screenshot_like
 
@@ -43,8 +51,10 @@ def scale_confidence(
 ) -> float:
     """Scale detector confidence down for low-quality or screenshot inputs."""
     clamped = max(0.0, min(1.0, raw_score))
-    quality_factor = 0.4 + 0.6 * max(0.0, min(1.0, quality))
+    quality_factor = 0.30 + 0.70 * max(0.0, min(1.0, quality))
     scaled = clamped * quality_factor
     if is_screenshot_like and screenshot_sensitive:
-        scaled *= 0.35
+        scaled *= 0.25
+    elif quality < 0.55 and screenshot_sensitive:
+        scaled *= 0.50
     return round(max(0.0, min(1.0, scaled)), 4)

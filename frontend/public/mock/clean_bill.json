@@ -1,0 +1,74 @@
+{
+  "doc_id": "mock_clean_bill",
+  "doc_type": "INVOICE_BILL",
+  "risk_score": 8,
+  "risk_level": "LOW",
+  "confidence": 0.92,
+  "verdict": "No significant indicators of tampering were detected in this restaurant bill. All item totals, tax calculations, and date checks are consistent. Standard manual verification is still recommended for accounting records.",
+  "findings": [],
+  "regions": [],
+  "extracted_fields": {
+    "bill_no": { "value": "REST-2026-089", "page": 1, "bbox": [0.35, 0.17, 0.72, 0.21] },
+    "bill_date": { "value": "14/02/2026", "page": 1, "bbox": [0.35, 0.22, 0.65, 0.26] },
+    "taxable_amount": { "value": 2438.1, "page": 1, "bbox": [0.55, 0.62, 0.88, 0.66] },
+    "cgst": { "value": 60.95, "page": 1, "bbox": [0.55, 0.67, 0.88, 0.71] },
+    "sgst": { "value": 60.95, "page": 1, "bbox": [0.55, 0.72, 0.88, 0.76] },
+    "net_total": { "value": 2560.0, "page": 1, "bbox": [0.55, 0.78, 0.88, 0.83] }
+  },
+  "checks": [
+    {
+      "name": "invoice:line_item_math",
+      "status": "pass",
+      "detail": "All 4 line items (quantities x rates) match their line totals."
+    },
+    {
+      "name": "invoice:line_sum_vs_total",
+      "status": "pass",
+      "detail": "Sum of line items (2560.00) matches the net total."
+    },
+    {
+      "name": "invoice:cgst_sgst_symmetry",
+      "status": "pass",
+      "detail": "CGST (60.95) and SGST (60.95) amounts are equal."
+    },
+    {
+      "name": "invoice:tax_total_math",
+      "status": "pass",
+      "detail": "Taxable amount (2438.10) plus CGST and SGST equals net total (2560.00)."
+    },
+    {
+      "name": "invoice:bill_date_plausibility",
+      "status": "pass",
+      "detail": "Bill date (14/02/2026) is plausible."
+    }
+  ],
+  "score_breakdown": [
+    {
+      "signal": "forensics:noise",
+      "label": "Minor thermal paper grain",
+      "contribution": 8.0
+    }
+  ],
+  "summary": {
+    "verdict": "No significant indicators of tampering were detected in this restaurant bill. All item totals, tax calculations, and date checks are consistent. Standard manual verification is still recommended for accounting records.",
+    "top_reasons": [
+      "All line-item quantities, rates, CGST, SGST, and net total calculations match.",
+      "Minor background grain is consistent with normal thermal receipt paper."
+    ],
+    "next_actions": [
+      "Retain this report for your records and perform standard vendor KYC checks."
+    ],
+    "disclaimer": "This automated assessment highlights statistical and structural indicators only. It does not constitute legal proof of forgery or authenticity; always perform independent verification before taking action."
+  },
+  "pages": [
+    {
+      "page": 1,
+      "width": 640,
+      "height": 860,
+      "image_url": "/mock/images/clean_bill.png",
+      "heatmap_url": "/mock/images/clean_bill_heatmap.png"
+    }
+  ],
+  "heatmap_url": "/mock/images/clean_bill_heatmap.png",
+  "processing_ms": 420
+}

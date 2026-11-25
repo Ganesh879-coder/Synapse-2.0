@@ -1,0 +1,118 @@
+{
+  "doc_id": "mock_tampered_gst",
+  "doc_type": "GST_CERT",
+  "risk_score": 87,
+  "risk_level": "HIGH",
+  "confidence": 0.89,
+  "verdict": "Multiple strong indicators suggest possible tampering on this GST certificate. The GSTIN check digit does not validate, the embedded PAN does not match the legal name, and localized visual anomalies appear over both the GSTIN and legal name fields.",
+  "findings": [
+    {
+      "id": "f_gst_checksum",
+      "category": "consistency",
+      "severity": "high",
+      "title": "GSTIN check digit does not match",
+      "plain_explanation": "Indicators suggest the GSTIN number may have been altered because its final verification character does not match the official pattern.",
+      "technical_detail": "Mod-36 weighted checksum failed on GSTIN '27AAAPS1234P1Z9' (expected check digit 'K', found '9').",
+      "evidence_region_ids": ["reg_gstin"]
+    },
+    {
+      "id": "f_gst_pan_name",
+      "category": "consistency",
+      "severity": "high",
+      "title": "Legal name does not match embedded tax ID",
+      "plain_explanation": "The proprietor name shown on the certificate does not match the initial encoded inside the GSTIN.",
+      "technical_detail": "PAN 5th character 'S' does not match surname initial 'M' of Legal Name 'Rajesh Mehta'.",
+      "evidence_region_ids": ["reg_legal_name"]
+    },
+    {
+      "id": "f_gst_visual_patch",
+      "category": "visual",
+      "severity": "high",
+      "title": "Possible text edit over key fields",
+      "plain_explanation": "Visual sharpness and background shading around the GSTIN and legal name differ from the rest of the page, suggesting a possible edit.",
+      "technical_detail": "text_patch detector flagged 2 outlier word regions (scores 0.88 and 0.82) on line background & Laplacian variance.",
+      "evidence_region_ids": ["reg_gstin", "reg_legal_name"]
+    }
+  ],
+  "regions": [
+    {
+      "id": "reg_gstin",
+      "page": 1,
+      "bbox": [0.36, 0.24, 0.78, 0.30],
+      "score": 0.88,
+      "reason": "Possible edit: background and sharpness around the GSTIN differ from neighbouring text."
+    },
+    {
+      "id": "reg_legal_name",
+      "page": 1,
+      "bbox": [0.36, 0.34, 0.74, 0.40],
+      "score": 0.82,
+      "reason": "Possible edit: localized visual anomaly detected over the legal name."
+    }
+  ],
+  "extracted_fields": {
+    "gstin": { "value": "27AAAPS1234P1Z9", "page": 1, "bbox": [0.36, 0.24, 0.78, 0.30] },
+    "legal_name": { "value": "Rajesh Mehta", "page": 1, "bbox": [0.36, 0.34, 0.74, 0.40] },
+    "constitution": { "value": "Proprietorship", "page": 1, "bbox": [0.36, 0.44, 0.68, 0.49] },
+    "address": { "value": "12 MG Road, Pune, Maharashtra", "page": 1, "bbox": [0.36, 0.53, 0.86, 0.59] },
+    "date_of_issue": { "value": "15/05/2023", "page": 1, "bbox": [0.36, 0.64, 0.60, 0.69] }
+  },
+  "checks": [
+    {
+      "name": "gst:gstin_format",
+      "status": "pass",
+      "detail": "GSTIN matches the 15-character structure."
+    },
+    {
+      "name": "gst:gstin_checksum",
+      "status": "fail",
+      "detail": "The GSTIN verification character does not match the official calculation."
+    },
+    {
+      "name": "gst:state_code",
+      "status": "pass",
+      "detail": "State code (27 - Maharashtra) matches the certificate address."
+    },
+    {
+      "name": "gst:pan_name_initial",
+      "status": "fail",
+      "detail": "The legal name initial does not match the tax ID embedded in the GSTIN."
+    },
+    {
+      "name": "gst:signature_status",
+      "status": "warn",
+      "detail": "The document states 'Digitally signed' but the signature is marked 'Not Verified'."
+    }
+  ],
+  "score_breakdown": [
+    { "signal": "rules:gst:gstin_checksum", "label": "GSTIN verification mismatch", "contribution": 36.4 },
+    { "signal": "forensics:text_patch", "label": "Localized text-patch anomaly", "contribution": 31.2 },
+    { "signal": "rules:gst:pan_name_initial", "label": "Name vs. tax ID mismatch", "contribution": 15.8 },
+    { "signal": "warn:gst:signature_status", "label": "Unverified digital signature notice", "contribution": 3.6 }
+  ],
+  "summary": {
+    "verdict": "Multiple strong indicators suggest possible tampering on this GST certificate. The GSTIN check digit does not validate, the embedded PAN does not match the legal name, and localized visual anomalies appear over both the GSTIN and legal name fields.",
+    "top_reasons": [
+      "The GSTIN verification character does not match the official calculation.",
+      "The proprietor name shown does not match the initial encoded in the GSTIN.",
+      "Visual sharpness and shading around the GSTIN and legal name differ from the rest of the page.",
+      "The digital signature notice is marked 'Not Verified'."
+    ],
+    "next_actions": [
+      "Verify the GSTIN, legal name, and registration status directly on the official GST portal (gst.gov.in).",
+      "Ask the issuer for the original unmodified PDF rather than a re-saved or screenshotted copy."
+    ],
+    "disclaimer": "This automated assessment highlights statistical and structural indicators only. It does not constitute legal proof of forgery or authenticity; always perform independent verification before taking action."
+  },
+  "pages": [
+    {
+      "page": 1,
+      "width": 700,
+      "height": 900,
+      "image_url": "/mock/images/tampered_gst.png",
+      "heatmap_url": "/mock/images/tampered_gst_heatmap.png"
+    }
+  ],
+  "heatmap_url": "/mock/images/tampered_gst_heatmap.png",
+  "processing_ms": 610
+}

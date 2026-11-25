@@ -12,11 +12,12 @@ without crashing the request.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from typing import Protocol, Sequence
+from typing import Protocol
 
-from app.explain import build_verdict
+from app.explain import build_explanation_summary
 from app.forensics import ForensicsAnalyzer
 from app.models.schemas import (
     AnalysisContext,
@@ -24,12 +25,14 @@ from app.models.schemas import (
     AnalyzerOutput,
     CheckResult,
     Finding,
+    PageArtifact,
+    PipelineStage,
     Region,
     Signal,
 )
 from app.ocr import OcrAnalyzer
 from app.rules import ClassifyAnalyzer, RulesAnalyzer
-from app.scoring import compute_risk
+from app.scoring import assess_risk
 from app.utils.logging import get_logger
 
 logger = get_logger("pipeline")
@@ -42,6 +45,13 @@ PIPELINE_ORDER: tuple[str, ...] = (
     "scoring",
     "explain",
 )
+
+_STAGE_BY_ANALYZER: dict[str, PipelineStage] = {
+    "ocr": "reading",
+    "classify": "reading",
+    "rules": "numbers",
+    "forensics": "edits",
+}
 
 
 class DocumentAnalyzer(Protocol):
@@ -74,7 +84,11 @@ class AnalysisPipeline:
         )
         self.timeout_seconds = timeout_seconds
 
-    def run(self, ctx: AnalysisContext) -> AnalysisResult:
+    def run(
+        self,
+        ctx: AnalysisContext,
+        stage_callback: Callable[[PipelineStage], None] | None = None,
+    ) -> AnalysisResult:
         """Execute ocr -> classify -> rules -> forensics -> scoring -> explain."""
         started = time.perf_counter()
         findings: list[Finding] = []
@@ -83,6 +97,11 @@ class AnalysisPipeline:
         signals: list[Signal] = []
 
         for analyzer in self.analyzers:
+            if stage_callback is not None:
+                stage = _STAGE_BY_ANALYZER.get(analyzer.name)
+                if stage is not None:
+                    stage_callback(stage)
+
             output = self._run_single_analyzer(analyzer, ctx)
             if output is None:
                 checks.append(
@@ -99,25 +118,71 @@ class AnalysisPipeline:
             signals.extend(output.signals)
             ctx.extracted_fields.update(output.extracted_fields)
 
-        risk_score, risk_level = compute_risk(findings, checks, signals)
-        verdict = build_verdict(risk_level, findings)
+        if stage_callback is not None:
+            stage_callback("scoring")
+
+        assessment = assess_risk(
+            findings=findings,
+            checks=checks,
+            signals=signals,
+            quality=ctx.quality,
+            ocr_words=ctx.ocr_words,
+            is_screenshot_like=ctx.is_screenshot_like,
+        )
+        summary = build_explanation_summary(
+            risk_level=assessment.risk_level,
+            risk_score=assessment.risk_score,
+            findings=findings,
+            checks=checks,
+        )
+        page_artifacts = self._build_page_artifacts(ctx)
+        top_heatmap = (
+            page_artifacts[0].heatmap_url
+            if page_artifacts and page_artifacts[0].heatmap_url
+            else ctx.heatmap_url
+        )
         processing_ms = int((time.perf_counter() - started) * 1000)
 
         return AnalysisResult(
             doc_id=ctx.doc_id,
             doc_type=ctx.doc_type,
-            risk_score=risk_score,
-            risk_level=risk_level,
-            verdict=verdict,
+            risk_score=assessment.risk_score,
+            risk_level=assessment.risk_level,
+            verdict=summary.verdict,
             findings=findings,
             regions=regions,
             extracted_fields={
                 key: field.model_dump() for key, field in ctx.extracted_fields.items()
             },
             checks=checks,
-            heatmap_url=ctx.heatmap_url,
+            heatmap_url=top_heatmap,
             processing_ms=processing_ms,
+            pages=page_artifacts,
+            confidence=assessment.confidence,
+            score_breakdown=assessment.score_breakdown,
+            summary=summary,
         )
+
+    def _build_page_artifacts(self, ctx: AnalysisContext) -> list[PageArtifact]:
+        """Construct API URLs for each rendered page and its heatmap overlay."""
+        artifacts: list[PageArtifact] = []
+        for page in ctx.pages:
+            heatmap_path = page.image_path.parent / f"heatmap_page_{page.page}.png"
+            heatmap_url = (
+                f"/api/analysis/{ctx.doc_id}/heatmap/{page.page}"
+                if heatmap_path.is_file()
+                else None
+            )
+            artifacts.append(
+                PageArtifact(
+                    page=page.page,
+                    width=page.width,
+                    height=page.height,
+                    image_url=f"/api/analysis/{ctx.doc_id}/page/{page.page}",
+                    heatmap_url=heatmap_url,
+                )
+            )
+        return artifacts
 
     def _run_single_analyzer(
         self,

@@ -12,6 +12,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from app.config import get_settings  # noqa: E402
 from app.forensics.common import compute_iou  # noqa: E402
 from app.models.schemas import AnalysisContext, AnalysisResult  # noqa: E402
 from app.pipeline import AnalysisPipeline  # noqa: E402
@@ -22,6 +23,11 @@ REPO_ROOT = BACKEND_DIR.parent
 SAMPLES_DIR = REPO_ROOT / "samples"
 TAMPERED_DIR = SAMPLES_DIR / "tampered"
 EVAL_DOC_PATH = REPO_ROOT / "docs" / "evaluation.md"
+
+_VISUAL_ONLY_PREFIXES: tuple[str, ...] = (
+    "kea_receipt_a_amount",
+    "phonepe_stmt_a_amount",
+)
 
 
 def _run_file(
@@ -46,6 +52,23 @@ def _best_iou(result: AnalysisResult, gt_bbox: list[float] | None) -> float | No
     return round(max(compute_iou(r.bbox, target) for r in result.regions), 4)
 
 
+def _detected_by(result: AnalysisResult) -> str:
+    if result.risk_level == "LOW":
+        return "—"
+    sig_names = {s.signal for s in result.score_breakdown}
+    if any(s.startswith("rules:") for s in sig_names) or any(
+        c.status == "fail" for c in result.checks
+    ):
+        return "consistency check"
+    if "forensics:text_patch" in sig_names:
+        return "text_patch"
+    return "pixel only"
+
+
+def _is_catchable_by_rules(filename: str) -> bool:
+    return not any(filename.startswith(pref) for pref in _VISUAL_ONLY_PREFIXES)
+
+
 def main() -> None:
     """Run evaluation on clean and tampered files and write docs/evaluation.md."""
     gt_path = TAMPERED_DIR / "ground_truth.json"
@@ -56,7 +79,7 @@ def main() -> None:
         p for p in SAMPLES_DIR.glob("*") if p.is_file() and not p.name.startswith(".")
     )
 
-    pipeline = AnalysisPipeline()
+    pipeline = AnalysisPipeline(timeout_seconds=get_settings().analyzer_timeout_seconds)
     rows: list[dict[str, Any]] = []
 
     with tempfile.TemporaryDirectory(prefix="kavach_eval_") as tmp_str:
@@ -78,6 +101,8 @@ def main() -> None:
                     "failed_checks": failed,
                     "top_finding": top_finding,
                     "best_iou": None,
+                    "detected_by": _detected_by(res),
+                    "catchable_by_rules": "—",
                     "signals": [f"{s.signal}:{s.contribution}" for s in res.score_breakdown],
                     "failed_check_names": [c.name for c in res.checks if c.status == "fail"],
                 }
@@ -103,6 +128,8 @@ def main() -> None:
                     "failed_checks": failed,
                     "top_finding": top_finding,
                     "best_iou": iou,
+                    "detected_by": _detected_by(res),
+                    "catchable_by_rules": "yes" if _is_catchable_by_rules(tpath.name) else "no",
                     "signals": [f"{s.signal}:{s.contribution}" for s in res.score_breakdown],
                     "failed_check_names": [c.name for c in res.checks if c.status == "fail"],
                 }
@@ -112,6 +139,8 @@ def main() -> None:
     tamp_rows = [r for r in rows if r["kind"] == "tampered"]
     orig_tamp = [r for r in tamp_rows if r["variant"] == "original"]
     wa_tamp = [r for r in tamp_rows if r["variant"] == "whatsapp"]
+    rule_tamp = [r for r in tamp_rows if r["catchable_by_rules"] == "yes"]
+    vis_tamp = [r for r in tamp_rows if r["catchable_by_rules"] == "no"]
 
     def _det_rate(items: list[dict[str, Any]]) -> float:
         if not items:
@@ -135,15 +164,16 @@ def main() -> None:
         "",
         "## Results Table",
         "",
-        "| File | Variant | Edit Description | Doc Type | Score | Level | Failed Checks | Top Finding | Best IoU |",
-        "| :--- | :--- | :--- | :--- | ---: | :--- | ---: | :--- | ---: |",
+        "| File | Variant | Edit Description | Doc Type | Score | Level | Failed Checks | Top Finding | Best IoU | Detected By | Catchable By Rules |",
+        "| :--- | :--- | :--- | :--- | ---: | :--- | ---: | :--- | ---: | :--- | :--- |",
     ]
     for r in rows:
         iou_str = f"{r['best_iou']:.3f}" if r["best_iou"] is not None else "—"
         md_lines.append(
             f"| `{r['file']}` | {r['variant']} | {r['edit_description']} | "
             f"{r['doc_type']} | {r['risk_score']} | {r['risk_level']} | "
-            f"{r['failed_checks']} | {r['top_finding']} | {iou_str} |"
+            f"{r['failed_checks']} | {r['top_finding']} | {iou_str} | "
+            f"{r['detected_by']} | {r['catchable_by_rules']} |"
         )
 
     md_lines.extend(
@@ -151,7 +181,9 @@ def main() -> None:
             "",
             "## Summary Metrics",
             "",
-            f"- **Detection Rate (Tampered MEDIUM/HIGH)**: {det_rate}% ({sum(1 for r in tamp_rows if r['risk_level'] in {'MEDIUM', 'HIGH'})}/{len(tamp_rows)})",
+            f"- **Detection Rate (All Tampered MEDIUM/HIGH)**: {det_rate}% ({sum(1 for r in tamp_rows if r['risk_level'] in {'MEDIUM', 'HIGH'})}/{len(tamp_rows)})",
+            f"- **Rule-Catchable Edits Detection Rate**: {_det_rate(rule_tamp)}% ({sum(1 for r in rule_tamp if r['risk_level'] in {'MEDIUM', 'HIGH'})}/{len(rule_tamp)})",
+            f"- **Visual-Only Edits Detection Rate**: {_det_rate(vis_tamp)}% ({sum(1 for r in vis_tamp if r['risk_level'] in {'MEDIUM', 'HIGH'})}/{len(vis_tamp)})",
             f"- **False-Positive Rate (Clean MEDIUM/HIGH)**: {fp_rate}% ({len(false_positives)}/{len(clean_rows)})",
             f"- **Mean IoU on Text Edits**: {mean_iou:.4f}",
             f"- **Original-Quality Tampered**: detection={_det_rate(orig_tamp)}%, mean IoU={_mean_iou(orig_tamp):.4f}",
@@ -179,6 +211,17 @@ def main() -> None:
                 f"- `{fp['file']}`: score={fp['risk_score']} ({fp['risk_level']}), "
                 f"signals={fp['signals']}, failed_checks={fp['failed_check_names']}"
             )
+
+    md_lines.extend(
+        [
+            "",
+            "## Known Limitations",
+            "",
+            "- **Low-resolution 480x640 inputs**: Small web/WhatsApp thumbnails lack sufficient pixel detail around dense text, which can cause OCR character drops and noisy local visual statistics.",
+            "- **Single-occurrence amounts with no cross-check**: When an amount appears only once on a document (such as a payment receipt total or a single bank statement row without running balances), consistency rules cannot verify it mathematically.",
+            "- **OCR latency on large or recompressed images**: RapidOCR inference on high-resolution or heavily recompressed images can be slow on CPU; if an analyzer exceeds its timeout budget, Kavach marks the result as unverified (`confidence <= 0.3`).",
+        ]
+    )
 
     report = "\n".join(md_lines) + "\n"
     EVAL_DOC_PATH.parent.mkdir(parents=True, exist_ok=True)

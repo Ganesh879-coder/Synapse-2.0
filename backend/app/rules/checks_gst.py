@@ -161,6 +161,8 @@ def run_gst_checks(
             )
 
     gstin_field = fields.get("gstin")
+    confirmed_field = fields.get("gstin_confirmed")
+    gstin_confirmed = bool(confirmed_field.value) if confirmed_field is not None else True
     raw_gstin = str(gstin_field.value).strip().upper() if gstin_field else ""
     gstin, gstin_corrected = normalize_gstin_with_confusion(raw_gstin) if raw_gstin else ("", False)
 
@@ -168,15 +170,18 @@ def run_gst_checks(
         checks.append(
             CheckResult(name="gst:gstin_format", status="skipped", detail="GSTIN not found.")
         )
-    elif len(gstin) != 15:
+    elif len(gstin) != 15 or not gstin_confirmed:
         _add_issue(
             "gst:gstin_format",
-            "Could not read the GSTIN reliably (wrong length after re-read).",
-            "Unreliable GSTIN read",
+            (
+                "The GSTIN could not be read reliably. Ask for a clearer scan "
+                "or verify the number on the GST portal."
+            ),
+            "GSTIN could not be read reliably",
             "low",
             gstin_field,
             status="warn",
-            weight=0.2,
+            weight=0.1,
         )
     else:
         if not GSTIN_REGEX.fullmatch(gstin):
@@ -381,7 +386,7 @@ def run_gst_checks(
             weight=0.3,
         )
 
-    # Template version check (2018 vs 2023 REG-06 layout)
+    # Template version check (informational note only; never affects risk score).
     order_field = fields.get("field_order")
     if order_field and isinstance(order_field.value, list):
         order = [str(x) for x in order_field.value]
@@ -396,14 +401,12 @@ def run_gst_checks(
                 )
             )
         else:
-            _add_issue(
-                "gst:template_layout",
-                "Field order does not match standard 2018 or 2023 GST REG-06 layouts.",
-                "Unrecognized GST REG-06 layout",
-                "low",
-                None,
-                status="warn",
-                weight=0.2,
+            checks.append(
+                CheckResult(
+                    name="gst:template_layout",
+                    status="warn",
+                    detail="Field order does not match standard 2018 or 2023 GST REG-06 layouts.",
+                )
             )
 
     return checks, findings, regions, signals

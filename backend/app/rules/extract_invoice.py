@@ -32,6 +32,28 @@ _LINE_ITEM_RE = re.compile(
 )
 
 
+def _find_word_bbox_for_token(
+    words: list[OcrWord], token: str, fallback: tuple[float, float, float, float]
+) -> tuple[float, float, float, float]:
+    """Return the specific OCR word bbox containing `token`, or `fallback`."""
+    cleaned_tok = token.strip()
+    for word in words:
+        if cleaned_tok in word.text or word.text in cleaned_tok:
+            return word.bbox
+    return fallback
+
+
+def _extract_last_amount_with_bbox(
+    text: str, words: list[OcrWord], fallback_bbox: tuple[float, float, float, float]
+) -> tuple[float | None, bool, tuple[float, float, float, float]]:
+    matches = _AMOUNT_RE.findall(text)
+    if not matches:
+        return None, False, fallback_bbox
+    val, corrected = parse_amount_with_confusion(matches[-1])
+    bbox = _find_word_bbox_for_token(words, matches[-1], fallback_bbox)
+    return val, corrected, bbox
+
+
 def _extract_last_amount(text: str) -> tuple[float | None, bool]:
     matches = _AMOUNT_RE.findall(text)
     if not matches:
@@ -64,18 +86,25 @@ def extract_invoice_fields(ocr_words: dict[int, list[OcrWord]]) -> dict[str, Ext
     line_items: list[dict[str, Any]] = []
     tax_section_idx: int | None = None
 
-    for idx, (page_num, text, _words, bbox) in enumerate(lines):
+    for idx, (page_num, text, words, bbox) in enumerate(lines):
         if "net_total" not in fields and _NET_TOTAL_LABEL.search(text):
-            amt, corrected = _extract_last_amount(text)
+            amt, corrected, amt_bbox = _extract_last_amount_with_bbox(text, words, bbox)
+            amt_page = page_num
             if amt is None and idx > 0:
-                amt, corrected = _extract_last_amount(lines[idx - 1][1])
+                amt, corrected, amt_bbox = _extract_last_amount_with_bbox(
+                    lines[idx - 1][1], lines[idx - 1][2], lines[idx - 1][3]
+                )
+                amt_page = lines[idx - 1][0]
             if amt is None and idx + 1 < len(lines):
-                amt, corrected = _extract_last_amount(lines[idx + 1][1])
+                amt, corrected, amt_bbox = _extract_last_amount_with_bbox(
+                    lines[idx + 1][1], lines[idx + 1][2], lines[idx + 1][3]
+                )
+                amt_page = lines[idx + 1][0]
             if amt is not None:
-                fields["net_total"] = ExtractedField(value=amt, page=page_num, bbox=bbox)
+                fields["net_total"] = ExtractedField(value=amt, page=amt_page, bbox=amt_bbox)
                 if corrected:
                     fields["amount_ocr_corrected"] = ExtractedField(
-                        value=True, page=page_num, bbox=bbox
+                        value=True, page=amt_page, bbox=amt_bbox
                     )
 
         if "taxable_amount" not in fields and _TAXABLE_LABEL.search(text):

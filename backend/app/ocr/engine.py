@@ -174,8 +174,9 @@ def reocr_cropped_region(
     page: PageImage,
     norm_bbox: tuple[float, float, float, float],
     pad: float = 0.02,
+    scale: float = 3.0,
 ) -> list[OcrWord]:
-    """Crop a region around norm_bbox, upscale 3x with Lanczos, sharpen, and re-OCR."""
+    """Crop a region around norm_bbox, upscale by `scale` with Lanczos, sharpen, and re-OCR."""
     bgr = cv2.imread(str(page.image_path), cv2.IMREAD_COLOR)
     if bgr is None:
         return []
@@ -188,13 +189,25 @@ def reocr_cropped_region(
         return []
 
     crop = bgr[y0:y1, x0:x1]
-    upscaled = cv2.resize(crop, None, fx=3.0, fy=3.0, interpolation=cv2.INTER_LANCZOS4)
+    upscaled = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
     blurred = cv2.GaussianBlur(upscaled, (0, 0), sigmaX=1.2)
     sharpened = cv2.addWeighted(upscaled, 1.6, blurred, -0.6, 0)
 
     words = _run_rapidocr(sharpened)
     if not words:
         words = _run_tesseract_fallback(sharpened)
+    return words
+
+
+def reocr_upscaled_page(page: PageImage, scale: float = 2.0) -> list[OcrWord]:
+    """Re-run OCR on a 2x Lanczos-upscaled full page (without blur/CLAHE)."""
+    bgr = cv2.imread(str(page.image_path), cv2.IMREAD_COLOR)
+    if bgr is None:
+        return []
+    upscaled = cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_LANCZOS4)
+    words = _run_rapidocr(upscaled)
+    if not words:
+        words = _run_tesseract_fallback(upscaled)
     return words
 
 

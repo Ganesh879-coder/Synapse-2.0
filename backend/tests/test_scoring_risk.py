@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.explain.explainer import build_explanation_summary
 from app.models.schemas import CheckResult, Finding, OcrWord, Signal
 from app.scoring.risk import assess_risk
 
@@ -86,3 +87,24 @@ def test_screenshot_scales_confidence_down() -> None:
         is_screenshot_like=True,
     )
     assert screenshot.confidence < normal.confidence
+
+
+def test_incomplete_analysis_caps_confidence_and_warns_user() -> None:
+    checks = [
+        CheckResult(name="analyzer:ocr", status="skipped", detail="Analyzer timed out."),
+    ]
+    assessment = assess_risk(findings=[], checks=checks, signals=[], quality={1: 0.95})
+    assert assessment.confidence <= 0.3
+
+    summary = build_explanation_summary(
+        risk_level=assessment.risk_level,
+        risk_score=assessment.risk_score,
+        findings=[],
+        checks=checks,
+    )
+    assert summary.verdict == (
+        "Kavach could not complete all checks on this file. "
+        "Treat the result as unverified and ask for a clearer copy."
+    )
+    assert "no indicators" not in summary.verdict.lower()
+    assert "no significant indicators" not in summary.verdict.lower()

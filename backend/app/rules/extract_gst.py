@@ -6,6 +6,7 @@ import re
 
 from app.models.schemas import ExtractedField, OcrWord, PageImage
 from app.ocr.engine import reocr_cropped_region
+from app.rules.checks_gst import normalize_gstin_with_confusion
 from app.rules.common import (
     DATE_PATTERN,
     find_value_after_label,
@@ -14,7 +15,6 @@ from app.rules.common import (
 )
 
 _GSTIN_CANDIDATE_RE = re.compile(r"\b[0-9A-Za-z]{14,15}\b")
-_GSTIN_STRICT_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")
 _FIELD_LABELS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("gstin", re.compile(r"(?i)(?:gstin|reg[il]strat[il1o]on\s*n[a-z0-9]{2,8}er|uin)")),
     ("legal_name", re.compile(r"(?i)(?:legal\s*name|legai\s*name|legl\s*sane)")),
@@ -27,11 +27,18 @@ _FIELD_LABELS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
+def _extract_gstin_token(text: str) -> str | None:
+    m = _GSTIN_CANDIDATE_RE.search(text.upper())
+    if m and m.group(0)[:2].isdigit():
+        return m.group(0)
+    return None
+
+
 def extract_gst_fields(
     ocr_words: dict[int, list[OcrWord]],
     pages: list[PageImage] | None = None,
 ) -> dict[str, ExtractedField]:
-    """Extract GST REG-06 fields with normalized bounding boxes."""
+    """Extract GST REG-06 fields with two-read GSTIN confirmation."""
     lines = ocr_lines_with_text(ocr_words)
     fields: dict[str, ExtractedField] = {}
     field_order: list[str] = []
@@ -45,28 +52,55 @@ def extract_gst_fields(
                 if key == "gstin" and gstin_label_loc is None:
                     gstin_label_loc = (page_num, bbox)
         if "gstin" not in fields:
-            m = _GSTIN_CANDIDATE_RE.search(text.upper())
-            if m and m.group(0)[:2].isdigit():
-                fields["gstin"] = ExtractedField(value=m.group(0), page=page_num, bbox=bbox)
+            tok = _extract_gstin_token(text)
+            if tok:
+                fields["gstin"] = ExtractedField(value=tok, page=page_num, bbox=bbox)
 
-    # Re-OCR cropped GSTIN cell at 3x Lanczos if missing or not strictly 15-char valid format.
+    # Independent cropped re-reads (3x, and 4x tiebreaker if reads disagree).
     reocr_loc = gstin_label_loc or (
         (fields["gstin"].page, fields["gstin"].bbox)
         if "gstin" in fields and fields["gstin"].bbox is not None
         else None
     )
     if pages and reocr_loc is not None:
-        cur_gstin = str(fields["gstin"].value).upper() if "gstin" in fields else ""
-        if not _GSTIN_STRICT_RE.fullmatch(cur_gstin):
-            pg_num, lbbox = reocr_loc
-            target_page = next((p for p in pages if p.page == pg_num), None)
-            if target_page is not None:
-                re_words = reocr_cropped_region(target_page, lbbox)
-                re_text = " ".join(w.text for w in re_words).upper()
-                print(f"[RE-OCR GSTIN] before='{cur_gstin}' after='{re_text}'")
-                m = re.search(r"\b[0-9A-Z]{14,15}\b", re_text)
-                if m and m.group(0)[:2].isdigit():
-                    fields["gstin"] = ExtractedField(value=m.group(0), page=pg_num, bbox=lbbox)
+        pg_num, lbbox = reocr_loc
+        target_page = next((p for p in pages if p.page == pg_num), None)
+        if target_page is not None:
+            read1_raw = str(fields["gstin"].value).upper() if "gstin" in fields else ""
+            read1, _ = normalize_gstin_with_confusion(read1_raw) if read1_raw else ("", False)
+
+            re3_words = reocr_cropped_region(target_page, lbbox, scale=3.0)
+            read2_raw = _extract_gstin_token(" ".join(w.text for w in re3_words)) or ""
+            read2, _ = normalize_gstin_with_confusion(read2_raw) if read2_raw else ("", False)
+
+            confirmed = False
+            chosen = read2 or read1
+            if len(read1) == 15 and read1 == read2:
+                confirmed = True
+                chosen = read1
+            else:
+                # Reads disagreed or length != 15: perform 4x Lanczos tiebreaker read.
+                re4_words = reocr_cropped_region(target_page, lbbox, scale=4.0)
+                read3_raw = _extract_gstin_token(" ".join(w.text for w in re4_words)) or ""
+                read3, _ = normalize_gstin_with_confusion(read3_raw) if read3_raw else ("", False)
+                if len(read3) == 15 and read3 in {read1, read2}:
+                    confirmed = True
+                    chosen = read3
+                elif len(read2) == 15 and read2 == read1:
+                    confirmed = True
+                    chosen = read2
+                else:
+                    chosen = read3 or read2 or read1
+
+            if chosen:
+                fields["gstin"] = ExtractedField(value=chosen, page=pg_num, bbox=lbbox)
+            fields["gstin_confirmed"] = ExtractedField(value=confirmed, page=pg_num, bbox=lbbox)
+    elif "gstin" in fields:
+        # Unit tests without page images pass OCR words directly; treat 15-char read as confirmed.
+        val = str(fields["gstin"].value).upper()
+        fields["gstin_confirmed"] = ExtractedField(
+            value=(len(val) == 15), page=fields["gstin"].page, bbox=fields["gstin"].bbox
+        )
 
     for key, pat in _FIELD_LABELS:
         if key in fields:

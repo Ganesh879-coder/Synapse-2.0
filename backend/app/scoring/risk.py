@@ -81,8 +81,9 @@ def compute_overall_confidence(
     quality: dict[int, float] | None = None,
     ocr_words: dict[int, list[OcrWord]] | None = None,
     is_screenshot_like: bool = False,
+    incomplete_analysis: bool = False,
 ) -> float:
-    """Compute overall assessment confidence [0, 1] from quality, OCR, and screenshot status."""
+    """Compute overall assessment confidence [0, 1] from quality, OCR, and completeness."""
     q_vals = list((quality or {}).values())
     mean_quality = sum(q_vals) / len(q_vals) if q_vals else 0.75
 
@@ -92,6 +93,8 @@ def compute_overall_confidence(
     conf = 0.55 * mean_quality + 0.45 * mean_ocr
     if is_screenshot_like:
         conf *= 0.75
+    if incomplete_analysis:
+        conf = min(conf, 0.3)
     return round(max(0.1, min(1.0, conf)), 3)
 
 
@@ -126,10 +129,15 @@ def assess_risk(
             discounted = prob * pixel_discount
             pixel_terms.append((sig.name, label, discounted))
 
-    # Include WARN checks as a small pixel-group term.
-    warn_checks = [c for c in checks if c.status == "warn"]
+    # Include WARN checks as a small pixel-group term (excluding informational gst:template_layout).
+    warn_checks = [
+        c
+        for c in checks
+        if c.status == "warn" and c.name != "gst:template_layout"
+    ]
     for chk in warn_checks:
-        pixel_terms.append((f"warn:{chk.name}", f"Warning: {chk.name}", 0.06))
+        prob = 0.04 if chk.name == "gst:gstin_format" else 0.06
+        pixel_terms.append((f"warn:{chk.name}", f"Warning: {chk.name}", prob))
 
     # Fallback if findings were passed directly without signals.
     if not active_signals and findings:
@@ -157,6 +165,13 @@ def assess_risk(
     # Single weak signal guard: never exceed MEDIUM (<= 55).
     if not strong_terms and len(pixel_terms) <= 2:
         score = min(score, 55)
+
+    # text_patch with NO failed consistency check can never exceed MEDIUM (and <45 on low-res).
+    has_consistency_failure = any(
+        c.status == "fail" and not c.name.startswith("metadata:") for c in checks
+    ) or any(s.category == "consistency" for s in active_signals)
+    if not has_consistency_failure:
+        score = min(score, 44 if low_res else 64)
 
     # Levels: LOW <30, MEDIUM 30-65, HIGH >65.
     if score > 65:
@@ -187,7 +202,13 @@ def assess_risk(
             )
         breakdown.sort(key=lambda item: item.contribution, reverse=True)
 
-    confidence = compute_overall_confidence(quality, ocr_words, is_screenshot_like)
+    incomplete = any(
+        c.status == "skipped" and c.name in {"analyzer:ocr", "analyzer:rules", "analyzer:classify"}
+        for c in checks
+    )
+    confidence = compute_overall_confidence(
+        quality, ocr_words, is_screenshot_like, incomplete_analysis=incomplete
+    )
     return RiskAssessment(
         risk_score=score,
         risk_level=level,

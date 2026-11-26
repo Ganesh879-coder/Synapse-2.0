@@ -22,7 +22,10 @@ class Settings:
     )
     pdf_dpi: int = field(default_factory=lambda: int(os.getenv("KAVACH_PDF_DPI", "200")))
     analyzer_timeout_seconds: float = field(
-        default_factory=lambda: float(os.getenv("KAVACH_ANALYZER_TIMEOUT_SECONDS", "15.0"))
+        default_factory=lambda: float(os.getenv("KAVACH_ANALYZER_TIMEOUT_SECONDS", "45.0"))
+    )
+    ocr_timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("KAVACH_OCR_TIMEOUT_SECONDS", "60.0"))
     )
     cors_origins: tuple[str, ...] = field(
         default_factory=lambda: tuple(

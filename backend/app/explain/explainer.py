@@ -52,8 +52,17 @@ _DEFAULT_VISUAL_ACTION = (
 )
 
 
-def build_verdict(risk_level: RiskLevel, findings: list[Finding]) -> str:
+def build_verdict(
+    risk_level: RiskLevel,
+    findings: list[Finding],
+    incomplete_analysis: bool = False,
+) -> str:
     """Return a 2-3 sentence plain-English summary without claiming absolute certainty."""
+    if incomplete_analysis:
+        return (
+            "Kavach could not complete all checks on this file. "
+            "Treat the result as unverified and ask for a clearer copy."
+        )
     if not findings and risk_level == "LOW":
         return (
             "No significant indicators of tampering were detected in this document. "
@@ -224,8 +233,12 @@ def build_explanation_summary(
     checks: list[CheckResult],
 ) -> ExplanationSummary:
     """Build deterministic plain-English summary with optional LLM polish."""
+    incomplete = any(
+        c.status == "skipped" and c.name in {"analyzer:ocr", "analyzer:rules", "analyzer:classify"}
+        for c in checks
+    )
     base = ExplanationSummary(
-        verdict=build_verdict(risk_level, findings),
+        verdict=build_verdict(risk_level, findings, incomplete_analysis=incomplete),
         top_reasons=_build_top_reasons(findings, checks),
         next_actions=_build_next_actions(findings, checks),
         disclaimer=_DISCLAIMER,

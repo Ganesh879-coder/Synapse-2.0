@@ -60,6 +60,10 @@ class ForensicsAnalyzer:
             tp_regions, tp_score = analyze_text_patch(
                 page, ctx.ocr_words.get(page.page, []), quality=q_score, is_screenshot_like=is_ss
             )
+            if min(page.width, page.height) < 1000:
+                tp_score = round(tp_score * 0.5, 4)
+                for reg in tp_regions:
+                    reg.score = round(reg.score * 0.5, 4)
             self._record_detector("text_patch", tp_regions, tp_score, 0.9, all_regions, signals)
 
             # 2. ELA

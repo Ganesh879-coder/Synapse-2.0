@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: kavach-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    disk:
+      name: kavach-data
+      mountPath: /data
+      sizeGB: 2
+    envVars:
+      - key: KAVACH_ENV
+        value: production
+      - key: DATA_DIR
+        value: /data
+      - key: DB_URL
+        value: sqlite:////data/kavach.db
+      - key: FILE_TTL_MINUTES
+        value: "60"
+      - key: MAX_CONCURRENT_JOBS
+        value: "2"
+      - key: MAX_QUEUE_LENGTH
+        value: "16"
+      - key: KAVACH_API_KEYS
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+
+  - type: web
+    name: kavach-frontend
+    runtime: docker
+    dockerfilePath: ./frontend/Dockerfile
+    dockerContext: ./frontend
+    healthCheckPath: /

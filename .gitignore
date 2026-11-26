@@ -4,13 +4,28 @@ __pycache__/
 *.egg-info/
 .venv/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Node
 node_modules/
 dist/
 
+# Databases & local data
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+data/
+
 # Environment & temp
 .env
+.env.*
+!.env.example
 *.log
+
+# Samples & tampered test artifacts (never commit)
 samples/*
 !samples/.gitkeep
+samples/tampered/

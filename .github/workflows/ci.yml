@@ -1,0 +1,72 @@
+name: Kavach CI
+
+on:
+  push:
+    branches: [production, main]
+  pull_request:
+    branches: [production, main]
+
+jobs:
+  backend-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install backend dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Ruff lint
+        working-directory: backend
+        run: ruff check app tests
+      - name: Mypy typecheck
+        working-directory: backend
+        run: mypy app tests
+      - name: Pytest suite
+        working-directory: backend
+        run: pytest -v
+      - name: Pip vulnerability audit
+        working-directory: backend
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt
+
+  frontend-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install & build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npx tsc --noEmit
+          npm run build
+      - name: NPM audit
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: [backend-checks, frontend-checks]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend Docker image
+        run: docker build -t kavach-backend:ci ./backend
+      - name: Build frontend Docker image
+        run: docker build -t kavach-frontend:ci ./frontend
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

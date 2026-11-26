@@ -88,6 +88,7 @@ class AnalysisPipeline:
         self,
         ctx: AnalysisContext,
         stage_callback: Callable[[PipelineStage], None] | None = None,
+        analyzer_observer: Callable[[str, float], None] | None = None,
     ) -> AnalysisResult:
         """Execute ocr -> classify -> rules -> forensics -> scoring -> explain."""
         started = time.perf_counter()
@@ -102,7 +103,10 @@ class AnalysisPipeline:
                 if stage is not None:
                     stage_callback(stage)
 
+            a_started = time.perf_counter()
             output = self._run_single_analyzer(analyzer, ctx)
+            if analyzer_observer is not None:
+                analyzer_observer(analyzer.name, time.perf_counter() - a_started)
             if output is None:
                 checks.append(
                     CheckResult(

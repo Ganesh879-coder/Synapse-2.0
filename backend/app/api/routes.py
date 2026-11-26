@@ -1,14 +1,15 @@
-"""API endpoints for health checks, async analysis jobs, artifacts, and PDF reports."""
+"""API endpoints for health/readiness, auth, metrics, async jobs, artifacts, and PDFs."""
 
 from __future__ import annotations
 
+import shutil
 import uuid
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Annotated, cast
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -18,13 +19,17 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from pydantic import BaseModel
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 
+from app.api.auth import ApiKeyRegistry, get_rate_limit_key, require_api_key
 from app.api.jobs import AnalysisJobStore
+from app.api.metrics import MetricsRegistry
 from app.api.report import build_pdf_report
+from app.api.worker import BoundedAnalysisPool, QueueFullError
 from app.config import Settings, get_settings
+from app.db import check_db_reachable
 from app.models.schemas import (
     AnalysisContext,
     AnalysisStatusResponse,
@@ -33,13 +38,20 @@ from app.models.schemas import (
 )
 from app.pipeline import AnalysisPipeline
 from app.utils.logging import get_logger
-from app.utils.pdf import render_document_pages
+from app.utils.pdf import DocumentLimitError, EncryptedPdfError, render_document_pages
 from app.utils.storage import TempDocumentStore
 from app.utils.validation import FileTooLargeError, UnsupportedMediaError, validate_upload_bytes
 
 logger = get_logger("api")
 router = APIRouter()
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=get_rate_limit_key)
+rate_limit_var: ContextVar[str | None] = ContextVar("kavach_rate_limit", default=None)
+
+
+class LoginRequest(BaseModel):
+    """Payload for POST /api/auth/login."""
+
+    access_key: str
 
 
 def get_pipeline(request: Request) -> AnalysisPipeline:
@@ -57,25 +69,48 @@ def get_jobs(request: Request) -> AnalysisJobStore:
     return cast(AnalysisJobStore, request.app.state.jobs)
 
 
+def get_pool(request: Request) -> BoundedAnalysisPool:
+    """Resolve the shared BoundedAnalysisPool from application state."""
+    return cast(BoundedAnalysisPool, request.app.state.pool)
+
+
+def get_metrics(request: Request) -> MetricsRegistry:
+    """Resolve the shared MetricsRegistry from application state."""
+    return cast(MetricsRegistry, request.app.state.metrics)
+
+
+def get_app_settings(request: Request) -> Settings:
+    """Resolve the active Settings from application state."""
+    return cast(Settings, getattr(request.app.state, "settings", get_settings()))
+
+
+def _dynamic_rate_limit() -> str:
+    return rate_limit_var.get() or get_settings().rate_limit
+
+
 def _execute_analysis_job(
     doc_id: str,
     source_path: Path,
     mime_type: str,
     raw_bytes: bytes,
     doc_type: str,
-    dpi: int,
+    settings: Settings,
     pipeline: AnalysisPipeline,
     jobs: AnalysisJobStore,
+    metrics: MetricsRegistry,
 ) -> None:
-    """Background worker that renders pages, runs the pipeline, and updates job state."""
+    """Worker-pool task that renders pages, runs the pipeline, and updates SQLite."""
     pages_dir = source_path.parent / "pages"
+    metrics.inc_started()
     try:
         jobs.set_stage(doc_id, "reading")
         pages = render_document_pages(
             source_path=source_path,
             mime_type=mime_type,
             output_dir=pages_dir,
-            dpi=dpi,
+            dpi=settings.pdf_dpi,
+            max_pdf_pages=settings.max_pdf_pages,
+            max_pixels=settings.max_pixels,
         )
         ctx = AnalysisContext(
             doc_id=doc_id,
@@ -88,8 +123,13 @@ def _execute_analysis_job(
         def _on_stage(stage: PipelineStage) -> None:
             jobs.set_stage(doc_id, stage)
 
-        result = pipeline.run(ctx, stage_callback=_on_stage)
+        result = pipeline.run(
+            ctx,
+            stage_callback=_on_stage,
+            analyzer_observer=metrics.observe_analyzer,
+        )
         jobs.set_done(doc_id, result)
+        metrics.inc_finished()
         logger.info(
             "Document analysis completed",
             extra={
@@ -100,7 +140,15 @@ def _execute_analysis_job(
                 "processing_ms": result.processing_ms,
             },
         )
+    except (EncryptedPdfError, DocumentLimitError) as exc:
+        metrics.inc_failed()
+        logger.warning(
+            "Document rejected by limits/encryption guard",
+            extra={"doc_id": doc_id, "mime_type": mime_type, "error": type(exc).__name__},
+        )
+        jobs.set_failed(doc_id, str(exc))
     except Exception as exc:
+        metrics.inc_failed()
         logger.warning(
             "Document analysis job failed",
             extra={"doc_id": doc_id, "mime_type": mime_type, "error": type(exc).__name__},
@@ -113,23 +161,92 @@ def _execute_analysis_job(
 
 @router.get("/health")
 async def health_check() -> dict[str, str]:
-    """Liveness probe endpoint."""
+    """Public liveness probe endpoint."""
     return {"status": "ok", "service": "kavach"}
 
 
-@router.post("/api/analyze", response_model=AnalyzeQueuedResponse)
-@limiter.limit("30/minute")
+@router.get("/ready", dependencies=[Depends(require_api_key)])
+async def readiness_check(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    jobs: AnalysisJobStore = Depends(get_jobs),
+) -> JSONResponse:
+    """Readiness probe: OCR warmed up, DB reachable, and disk space available."""
+    ocr_ready = bool(getattr(request.app.state, "ocr_ready", False))
+    db_ok = check_db_reachable(jobs.engine)
+    disk_free_mb = shutil.disk_usage(settings.data_dir).free // (1024 * 1024)
+    disk_ok = disk_free_mb >= 50
+    ready = ocr_ready and db_ok and disk_ok
+    code = status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE
+    return JSONResponse(
+        status_code=code,
+        content={
+            "status": "ready" if ready else "not_ready",
+            "ocr_ready": ocr_ready,
+            "db_reachable": db_ok,
+            "disk_free_mb": disk_free_mb,
+        },
+    )
+
+
+@router.get("/api/metrics", dependencies=[Depends(require_api_key)])
+async def prometheus_metrics(
+    pool: BoundedAnalysisPool = Depends(get_pool),
+    metrics: MetricsRegistry = Depends(get_metrics),
+) -> PlainTextResponse:
+    """Prometheus-format metrics endpoint behind the access key."""
+    return PlainTextResponse(
+        metrics.render_prometheus(pool.queue_depth),
+        media_type="text/plain; version=0.0.4",
+    )
+
+
+@router.post("/api/auth/login")
+async def auth_login(payload: LoginRequest, request: Request) -> JSONResponse:
+    """Verify an access key and set an HttpOnly session cookie."""
+    registry: ApiKeyRegistry = request.app.state.key_registry
+    if not registry.verify(payload.access_key):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid access code.",
+        )
+    resp = JSONResponse({"status": "authenticated"})
+    resp.set_cookie(
+        key="kavach_key",
+        value=payload.access_key.strip(),
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+    )
+    return resp
+
+
+@router.post("/api/auth/logout")
+async def auth_logout() -> JSONResponse:
+    """Clear the access key cookie."""
+    resp = JSONResponse({"status": "logged_out"})
+    resp.delete_cookie("kavach_key")
+    return resp
+
+
+@router.post(
+    "/api/analyze",
+    response_model=AnalyzeQueuedResponse,
+    dependencies=[Depends(require_api_key)],
+)
+@limiter.limit(_dynamic_rate_limit)
 async def analyze_document(
     request: Request,
-    background_tasks: BackgroundTasks,
     file: Annotated[UploadFile, File(...)],
     doc_type: Annotated[str, Form()] = "unknown",
-    settings: Settings = Depends(get_settings),
+    settings: Settings = Depends(get_app_settings),
     pipeline: AnalysisPipeline = Depends(get_pipeline),
     store: TempDocumentStore = Depends(get_store),
     jobs: AnalysisJobStore = Depends(get_jobs),
+    pool: BoundedAnalysisPool = Depends(get_pool),
+    metrics: MetricsRegistry = Depends(get_metrics),
 ) -> AnalyzeQueuedResponse:
-    """Validate uploaded JPG/PNG/PDF by magic bytes and queue background analysis."""
+    """Validate uploaded JPG/PNG/PDF by magic bytes and enqueue in bounded worker pool."""
     _ = request
     try:
         raw_bytes = await file.read()
@@ -171,24 +288,37 @@ async def analyze_document(
         return AnalyzeQueuedResponse(doc_id=doc_id, status="queued")
 
     jobs.create_queued(doc_id)
+    try:
+        pool.submit(
+            _execute_analysis_job,
+            doc_id=doc_id,
+            source_path=source_path,
+            mime_type=mime_type,
+            raw_bytes=raw_bytes,
+            doc_type=doc_type,
+            settings=settings,
+            pipeline=pipeline,
+            jobs=jobs,
+            metrics=metrics,
+        )
+    except QueueFullError as exc:
+        jobs.delete_job(doc_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
 
-    background_tasks.add_task(
-        _execute_analysis_job,
-        doc_id=doc_id,
-        source_path=source_path,
-        mime_type=mime_type,
-        raw_bytes=raw_bytes,
-        doc_type=doc_type,
-        dpi=settings.pdf_dpi,
-        pipeline=pipeline,
-        jobs=jobs,
-    )
     return AnalyzeQueuedResponse(doc_id=doc_id, status="queued")
 
 
-@router.get("/api/analysis/{doc_id}", response_model=AnalysisStatusResponse)
+@router.get(
+    "/api/analysis/{doc_id}",
+    response_model=AnalysisStatusResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def get_analysis_status(
     doc_id: str,
+    settings: Settings = Depends(get_app_settings),
     jobs: AnalysisJobStore = Depends(get_jobs),
 ) -> AnalysisStatusResponse:
     """Poll job status, current stage, and completed AnalysisResult."""
@@ -197,7 +327,22 @@ async def get_analysis_status(
     job = jobs.get(doc_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis not found.")
+    if settings.delete_after_view and job.status == "done":
+        jobs.redact_extracted_fields(doc_id)
     return job
+
+
+@router.delete("/api/analysis/{doc_id}", dependencies=[Depends(require_api_key)])
+async def delete_analysis(
+    doc_id: str,
+    jobs: AnalysisJobStore = Depends(get_jobs),
+) -> dict[str, str]:
+    """Immediately delete stored files and database record for an analysis."""
+    if not doc_id.isalnum():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid doc_id.")
+    if not jobs.delete_job(doc_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis not found.")
+    return {"status": "deleted", "doc_id": doc_id}
 
 
 def _resolve_page_file(store: TempDocumentStore, doc_id: str, filename: str) -> Path:
@@ -210,7 +355,7 @@ def _resolve_page_file(store: TempDocumentStore, doc_id: str, filename: str) -> 
     return target
 
 
-@router.get("/api/analysis/{doc_id}/page/{page_num}")
+@router.get("/api/analysis/{doc_id}/page/{page_num}", dependencies=[Depends(require_api_key)])
 async def get_page_image(
     doc_id: str,
     page_num: int,
@@ -223,7 +368,7 @@ async def get_page_image(
     return FileResponse(target, media_type="image/png")
 
 
-@router.get("/api/analysis/{doc_id}/heatmap/{page_num}")
+@router.get("/api/analysis/{doc_id}/heatmap/{page_num}", dependencies=[Depends(require_api_key)])
 async def get_heatmap_image(
     doc_id: str,
     page_num: int,
@@ -239,7 +384,7 @@ async def get_heatmap_image(
     return FileResponse(target, media_type="image/png")
 
 
-@router.get("/api/analysis/{doc_id}/report.pdf")
+@router.get("/api/analysis/{doc_id}/report.pdf", dependencies=[Depends(require_api_key)])
 async def get_pdf_report(
     doc_id: str,
     jobs: AnalysisJobStore = Depends(get_jobs),
@@ -269,7 +414,7 @@ async def get_pdf_report(
     )
 
 
-@router.get("/api/artifacts/{doc_id}/{filename}")
+@router.get("/api/artifacts/{doc_id}/{filename}", dependencies=[Depends(require_api_key)])
 async def get_artifact(
     doc_id: str,
     filename: str,

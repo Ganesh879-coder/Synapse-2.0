@@ -28,11 +28,15 @@ def test_upload_each_sample_completes_as_done(tmp_path: Path) -> None:
     if not files:
         pytest.skip("No sample documents present in samples/")
 
-    app = create_app(Settings(temp_dir=tmp_path))
+    headers = {"X-Kavach-Key": "test-key"}
+    app = create_app(
+        Settings(temp_dir=tmp_path, data_dir=tmp_path, api_keys=("test-key",))
+    )
     with TestClient(app) as client:
         for sample_path in files:
             resp = client.post(
                 "/api/analyze",
+                headers=headers,
                 files={
                     "file": (
                         sample_path.name,
@@ -47,14 +51,14 @@ def test_upload_each_sample_completes_as_done(tmp_path: Path) -> None:
             doc_id = queued["doc_id"]
 
             final_status = None
-            for _ in range(60):
-                poll = client.get(f"/api/analysis/{doc_id}")
+            for _ in range(300):
+                poll = client.get(f"/api/analysis/{doc_id}", headers=headers)
                 assert poll.status_code == 200
                 body = poll.json()
                 if body["status"] in {"done", "failed"}:
                     final_status = body
                     break
-                time.sleep(0.1)
+                time.sleep(0.2)
 
             assert final_status is not None
             assert final_status["status"] == "done"

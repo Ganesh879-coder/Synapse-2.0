@@ -1,11 +1,14 @@
-"""Structured JSON logging without document content or PII."""
+"""Structured JSON logging with request_id and zero document content/PII."""
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
+
+request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
 
 
 class JsonFormatter(logging.Formatter):
@@ -44,6 +47,7 @@ class JsonFormatter(logging.Formatter):
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
+            "request_id": request_id_var.get(),
             "message": record.getMessage(),
         }
         for key, value in record.__dict__.items():

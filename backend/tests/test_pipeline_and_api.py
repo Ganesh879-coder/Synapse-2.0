@@ -113,7 +113,10 @@ def test_temp_store_deletes_expired_dirs(tmp_path: Path) -> None:
 
 
 def test_health_and_analyze_endpoints(tmp_path: Path) -> None:
-    app = create_app(Settings(temp_dir=tmp_path))
+    headers = {"X-Kavach-Key": "test-key"}
+    app = create_app(
+        Settings(temp_dir=tmp_path, data_dir=tmp_path, api_keys=("test-key",))
+    )
     with TestClient(app) as client:
         health = client.get("/health")
         assert health.status_code == 200
@@ -121,6 +124,7 @@ def test_health_and_analyze_endpoints(tmp_path: Path) -> None:
 
         png_resp = client.post(
             "/api/analyze",
+            headers=headers,
             files={"file": ("sample.png", _make_png_bytes(), "image/png")},
             data={"doc_type": "invoice"},
         )
@@ -129,14 +133,21 @@ def test_health_and_analyze_endpoints(tmp_path: Path) -> None:
         assert queued["status"] == "queued"
         assert "doc_id" in queued
 
-        status_resp = client.get(f"/api/analysis/{queued['doc_id']}")
-        assert status_resp.status_code == 200
-        assert status_resp.json()["status"] == "done"
-        assert status_resp.json()["result"]["risk_score"] == 0
-        assert status_resp.json()["result"]["risk_level"] == "LOW"
+        status_payload = {}
+        for _ in range(100):
+            status_resp = client.get(f"/api/analysis/{queued['doc_id']}", headers=headers)
+            assert status_resp.status_code == 200
+            status_payload = status_resp.json()
+            if status_payload["status"] in {"done", "failed"}:
+                break
+            time.sleep(0.1)
+        assert status_payload.get("status") == "done"
+        assert status_payload["result"]["risk_score"] == 0
+        assert status_payload["result"]["risk_level"] == "LOW"
 
         pdf_resp = client.post(
             "/api/analyze",
+            headers=headers,
             files={"file": ("sample.pdf", _make_pdf_bytes(), "application/pdf")},
         )
         assert pdf_resp.status_code == 200
@@ -144,6 +155,7 @@ def test_health_and_analyze_endpoints(tmp_path: Path) -> None:
 
         bad_resp = client.post(
             "/api/analyze",
+            headers=headers,
             files={"file": ("fake.png", b"NOT_A_REAL_PNG_FILE", "image/png")},
         )
         assert bad_resp.status_code == 415

@@ -2,11 +2,8 @@ import { useMemo, useState } from "react";
 import {
   deleteAnalysis,
   getReportPdfUrl,
-  getStoredAccessKey,
   IS_MOCK_MODE,
-  setStoredAccessKey,
 } from "./api";
-import { AccessGate } from "./components/AccessGate";
 import { ChecksTable } from "./components/ChecksTable";
 import { DocumentViewer } from "./components/DocumentViewer";
 import { FindingCard } from "./components/FindingCard";
@@ -60,7 +57,6 @@ function isFieldFlagged(fieldKey: string, checks: CheckResult[]): boolean {
 export default function App() {
   const { theme, toggleTheme } = useTheme();
   const { phase, stage, result, error, analyzeFile, runMock, reset } = useAnalysis();
-  const [hasKey, setHasKey] = useState<boolean>(() => IS_MOCK_MODE || Boolean(getStoredAccessKey()));
   const [deleting, setDeleting] = useState<boolean>(false);
   const [lang, setLang] = useState<"en" | "hi">("en");
   const [hoveredRegionIds, setHoveredRegionIds] = useState<string[]>([]);
@@ -153,20 +149,6 @@ export default function App() {
               </span>
             )}
 
-            {!IS_MOCK_MODE && hasKey && (
-              <button
-                type="button"
-                onClick={() => {
-                  setStoredAccessKey("");
-                  setHasKey(false);
-                  reset();
-                }}
-                className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-              >
-                Lock
-              </button>
-            )}
-
             <button
               type="button"
               onClick={() => setLang((prev) => (prev === "en" ? "hi" : "en"))}
@@ -189,39 +171,32 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
-        {!IS_MOCK_MODE && !hasKey ? (
-          <AccessGate onAuthenticated={() => setHasKey(true)} />
-        ) : (
-          <>
-            {phase === "upload" && (
-              <UploadZone onFileSelected={analyzeFile} onSampleSelected={runMock} />
-            )}
+        {phase === "upload" && (
+          <UploadZone onFileSelected={analyzeFile} onSampleSelected={runMock} />
+        )}
 
-            {phase === "analysing" && <ProgressSteps activeStage={stage} />}
+        {phase === "analysing" && <ProgressSteps activeStage={stage} />}
 
-            {phase === "error" && (
-              <section
-                role="alert"
-                className="mx-auto max-w-lg rounded-2xl border border-rose-200 bg-white p-6 text-center shadow-sm dark:border-rose-500/30 dark:bg-slate-900"
+        {phase === "error" && (
+          <section
+            role="alert"
+            className="mx-auto max-w-lg rounded-2xl border border-rose-200 bg-white p-6 text-center shadow-sm dark:border-rose-500/30 dark:bg-slate-900"
+          >
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+              Could not complete verification
+            </h2>
+            <p className="mt-2 text-sm text-rose-700 dark:text-rose-300">{error}</p>
+            <div className="mt-5 flex justify-center gap-3">
+              <button
+                type="button"
+                onClick={reset}
+                className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               >
-                <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
-                  Could not complete verification
-                </h2>
-                <p className="mt-2 text-sm text-rose-700 dark:text-rose-300">{error}</p>
-                <div className="mt-5 flex justify-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!getStoredAccessKey() && !IS_MOCK_MODE) setHasKey(false);
-                      reset();
-                    }}
-                    className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    Try again
-                  </button>
-                </div>
-              </section>
-            )}
+                Try again
+              </button>
+            </div>
+          </section>
+        )}
 
         {phase === "result" && result && (
           <div className="space-y-6">
@@ -413,8 +388,6 @@ export default function App() {
               </div>
             </div>
           </div>
-        )}
-          </>
         )}
       </main>
     </div>

@@ -62,10 +62,13 @@ def require_api_key(
     request: Request,
     settings: Settings = Depends(get_settings),
 ) -> str:
-    """FastAPI dependency enforcing X-Kavach-Key header or kavach_key cookie."""
+    """Enforce X-Kavach-Key header or kavach_key cookie when KAVACH_API_KEYS is set."""
     registry: ApiKeyRegistry | None = getattr(request.app.state, "key_registry", None)
     if registry is None:
         registry = ApiKeyRegistry(settings.api_keys)
+
+    if not registry.is_configured:
+        return "public"
 
     candidate = request.headers.get("x-kavach-key") or request.cookies.get("kavach_key")
     if not registry.verify(candidate):

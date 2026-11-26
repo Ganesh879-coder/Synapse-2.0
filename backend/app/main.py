@@ -14,6 +14,7 @@ from slowapi.errors import RateLimitExceeded
 from app.api.jobs import AnalysisJobStore
 from app.api.routes import limiter, router
 from app.config import Settings, get_settings
+from app.ocr.engine import _get_rapid_ocr
 from app.pipeline import AnalysisPipeline
 from app.utils.logging import configure_logging, get_logger
 from app.utils.storage import TempDocumentStore, run_cleanup_loop
@@ -24,6 +25,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Manage startup initialization and background temp-file cleanup."""
     settings: Settings = app.state.settings
     logger = get_logger("main")
+    _get_rapid_ocr()
     cleanup_task = asyncio.create_task(run_cleanup_loop(app.state.store))
     logger.info(
         "Kavach backend started",

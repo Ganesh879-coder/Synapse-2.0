@@ -128,6 +128,7 @@ class AnalysisPipeline:
             quality=ctx.quality,
             ocr_words=ctx.ocr_words,
             is_screenshot_like=ctx.is_screenshot_like,
+            pages=ctx.pages,
         )
         summary = build_explanation_summary(
             risk_level=assessment.risk_level,

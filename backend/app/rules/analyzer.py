@@ -48,7 +48,7 @@ class RulesAnalyzer:
         signals: list[Signal] = []
 
         if canonical_type == "GST_CERT":
-            extracted = extract_gst_fields(ctx.ocr_words)
+            extracted = extract_gst_fields(ctx.ocr_words, pages=ctx.pages)
             checks, findings, regions, signals = run_gst_checks(extracted)
         elif canonical_type == "INVOICE_BILL":
             extracted = extract_invoice_fields(ctx.ocr_words)

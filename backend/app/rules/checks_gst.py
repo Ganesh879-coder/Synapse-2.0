@@ -21,7 +21,7 @@ GST_STATE_CODES: dict[str, tuple[str, ...]] = {
     "06": ("haryana",),
     "07": ("delhi", "new delhi"),
     "08": ("rajasthan",),
-    "09": ("uttar pradesh",),
+    "09": ("uttar pradesh", "utarprade", "ghaziabad"),
     "10": ("bihar",),
     "11": ("sikkim",),
     "12": ("arunachal pradesh",),
@@ -93,15 +93,13 @@ def verify_gstin_checksum(gstin: str) -> bool:
 
 _DIGIT_POSITIONS = frozenset({0, 1, 7, 8, 9, 10})
 _LETTER_POSITIONS = frozenset({2, 3, 4, 5, 6, 11, 13})
-_TO_DIGIT = {"O": "0", "I": "1", "S": "5", "B": "8"}
-_TO_LETTER = {"0": "O", "1": "I", "5": "S", "8": "B"}
+_TO_DIGIT = {"O": "0", "o": "0", "I": "1", "l": "1", "S": "5", "B": "8", "G": "6", "g": "9"}
+_TO_LETTER = {"0": "O", "1": "I", "5": "S", "8": "B", "6": "G", "9": "G"}
 
 
 def normalize_gstin_with_confusion(raw: str) -> tuple[str, bool]:
-    """Retry GSTIN validation using O/0, I/1, S/5, B/8 confusion mapping if needed."""
+    """Apply fixed position-based character-confusion map (never checksum-dependent)."""
     candidate = raw.strip().upper()
-    if verify_gstin_checksum(candidate):
-        return candidate, False
     if len(candidate) != 15:
         return candidate, False
 
@@ -114,14 +112,8 @@ def normalize_gstin_with_confusion(raw: str) -> tuple[str, bool]:
         elif idx in _LETTER_POSITIONS and ch in _TO_LETTER:
             chars[idx] = _TO_LETTER[ch]
             changed = True
-        elif idx == 13 and ch != "Z":
-            chars[idx] = "Z"
-            changed = True
 
-    corrected = "".join(chars)
-    if changed and verify_gstin_checksum(corrected):
-        return corrected, True
-    return candidate, False
+    return "".join(chars), changed
 
 
 def run_gst_checks(
@@ -157,15 +149,16 @@ def run_gst_checks(
         findings.append(fnd)
         if reg is not None:
             regions.append(reg)
-        signals.append(
-            Signal(
-                name=f"rules:{name}",
-                category="consistency",
-                weight_hint=weight,
-                confidence=0.85 if status == "fail" else 0.4,
-                region_ids=[reg.id] if reg is not None else [],
+        if status == "fail":
+            signals.append(
+                Signal(
+                    name=f"rules:{name}",
+                    category="consistency",
+                    weight_hint=weight,
+                    confidence=0.85,
+                    region_ids=[reg.id] if reg is not None else [],
+                )
             )
-        )
 
     gstin_field = fields.get("gstin")
     raw_gstin = str(gstin_field.value).strip().upper() if gstin_field else ""
@@ -174,6 +167,16 @@ def run_gst_checks(
     if not gstin_field:
         checks.append(
             CheckResult(name="gst:gstin_format", status="skipped", detail="GSTIN not found.")
+        )
+    elif len(gstin) != 15:
+        _add_issue(
+            "gst:gstin_format",
+            "Could not read the GSTIN reliably (wrong length after re-read).",
+            "Unreliable GSTIN read",
+            "low",
+            gstin_field,
+            status="warn",
+            weight=0.2,
         )
     else:
         if not GSTIN_REGEX.fullmatch(gstin):

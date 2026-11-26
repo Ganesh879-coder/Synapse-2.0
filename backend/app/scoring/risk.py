@@ -8,6 +8,7 @@ from app.models.schemas import (
     CheckResult,
     Finding,
     OcrWord,
+    PageImage,
     RiskLevel,
     ScoreContribution,
     Signal,
@@ -101,39 +102,60 @@ def assess_risk(
     quality: dict[int, float] | None = None,
     ocr_words: dict[int, list[OcrWord]] | None = None,
     is_screenshot_like: bool = False,
+    pages: list[PageImage] | None = None,
 ) -> RiskAssessment:
     """Combine signals, findings, and checks via noisy-OR into a 0-100 risk score."""
     active_signals = list(signals or [])
-    terms: list[tuple[str, str, float, bool]] = []
+    q_vals = list((quality or {}).values())
+    low_quality = bool(q_vals) and min(q_vals) < 0.55
+    low_res = bool(pages) and any(min(p.width, p.height) < 1000 for p in (pages or []))
+    pixel_discount = 0.55 if (is_screenshot_like or low_quality or low_res) else 1.0
+
+    strong_terms: list[tuple[str, str, float]] = []
+    pixel_terms: list[tuple[str, str, float]] = []
 
     for sig in active_signals:
         prob, is_strong = _signal_probability(sig)
-        if prob > 0.01:
-            label = _SIGNAL_LABELS.get(sig.name, sig.name.replace(":", " - ").title())
-            terms.append((sig.name, label, prob, is_strong))
+        if prob <= 0.01:
+            continue
+        label = _SIGNAL_LABELS.get(sig.name, sig.name.replace(":", " - ").title())
+        if is_strong:
+            # Never discount hard consistency failures or strong text_patch regions.
+            strong_terms.append((sig.name, label, prob))
+        else:
+            discounted = prob * pixel_discount
+            pixel_terms.append((sig.name, label, discounted))
 
-    # Include WARN checks as a small additive/noisy-OR term.
+    # Include WARN checks as a small pixel-group term.
     warn_checks = [c for c in checks if c.status == "warn"]
     for chk in warn_checks:
-        terms.append((f"warn:{chk.name}", f"Warning: {chk.name}", 0.08, False))
+        pixel_terms.append((f"warn:{chk.name}", f"Warning: {chk.name}", 0.06))
 
     # Fallback if findings were passed directly without signals.
     if not active_signals and findings:
         sev_probs = {"low": 0.15, "medium": 0.40, "high": 0.72, "critical": 0.88}
         for fnd in findings:
             p = sev_probs.get(fnd.severity, 0.20)
-            terms.append((f"finding:{fnd.id}", fnd.title, p, fnd.severity in {"high", "critical"}))
+            if fnd.severity in {"high", "critical"}:
+                strong_terms.append((f"finding:{fnd.id}", fnd.title, p))
+            else:
+                pixel_terms.append((f"finding:{fnd.id}", fnd.title, p))
 
-    # Noisy-OR combination: 1 - prod(1 - p_i)
-    survival = 1.0
-    for _, _, prob, _ in terms:
-        survival *= max(0.0, min(1.0, 1.0 - prob))
-    combined_prob = 1.0 - survival
+    # Group noisy-OR for pixel-only/weak signals, capped at 0.26 so clean docs stay < 30 (LOW).
+    pixel_survival = 1.0
+    for _, _, prob in pixel_terms:
+        pixel_survival *= max(0.0, min(1.0, 1.0 - prob))
+    pixel_group_prob = min(0.26, 1.0 - pixel_survival)
+
+    # Combine strong signals + capped pixel group via noisy-OR.
+    strong_survival = 1.0
+    for _, _, prob in strong_terms:
+        strong_survival *= max(0.0, min(1.0, 1.0 - prob))
+    combined_prob = 1.0 - (strong_survival * (1.0 - pixel_group_prob))
     score = int(round(max(0.0, min(1.0, combined_prob)) * 100.0))
 
     # Single weak signal guard: never exceed MEDIUM (<= 55).
-    strong_count = sum(1 for _, _, _, is_strong in terms if is_strong)
-    if strong_count == 0 and len(terms) <= 2:
+    if not strong_terms and len(pixel_terms) <= 2:
         score = min(score, 55)
 
     # Levels: LOW <30, MEDIUM 30-65, HIGH >65.
@@ -144,11 +166,21 @@ def assess_risk(
     else:
         level = "LOW"
 
-    # Build sorted score_breakdown proportional to each term's probability.
-    total_prob = sum(p for _, _, p, _ in terms)
+    # Build sorted score_breakdown proportional to effective contributions.
+    raw_pixel_sum = sum(p for _, _, p in pixel_terms)
+    scaled_pixel_terms = [
+        (
+            name,
+            label,
+            (p / raw_pixel_sum) * pixel_group_prob if raw_pixel_sum > 0 else 0.0,
+        )
+        for name, label, p in pixel_terms
+    ]
+    all_terms = strong_terms + scaled_pixel_terms
+    total_prob = sum(p for _, _, p in all_terms)
     breakdown: list[ScoreContribution] = []
     if total_prob > 0.0 and score > 0:
-        for sig_name, label, prob, _ in terms:
+        for sig_name, label, prob in all_terms:
             contrib = round((prob / total_prob) * score, 2)
             breakdown.append(
                 ScoreContribution(signal=sig_name, label=label, contribution=contrib)

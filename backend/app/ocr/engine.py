@@ -57,10 +57,9 @@ def preprocess_for_ocr(image_bgr: np.ndarray) -> np.ndarray:
     img = image_bgr
     height, width = img.shape[:2]
 
-    # Gently upscale very small images without over-blurring JPEG text.
-    if min(height, width) < 700:
-        scale = min(1.5, 720.0 / max(1, min(height, width)))
-        img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+    # Upscale whole page 2x whenever its shorter side is under 1000px.
+    if min(height, width) < 1000:
+        img = cv2.resize(img, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_LANCZOS4)
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
@@ -168,6 +167,34 @@ def extract_ocr_words(page: PageImage, use_preprocessing: bool = True) -> list[O
     words = _run_rapidocr(processed)
     if not words:
         words = _run_tesseract_fallback(processed)
+    return words
+
+
+def reocr_cropped_region(
+    page: PageImage,
+    norm_bbox: tuple[float, float, float, float],
+    pad: float = 0.02,
+) -> list[OcrWord]:
+    """Crop a region around norm_bbox, upscale 3x with Lanczos, sharpen, and re-OCR."""
+    bgr = cv2.imread(str(page.image_path), cv2.IMREAD_COLOR)
+    if bgr is None:
+        return []
+    h, w = bgr.shape[:2]
+    x0 = max(0, int((norm_bbox[0] - pad) * w))
+    y0 = max(0, int((norm_bbox[1] - pad) * h))
+    x1 = min(w, int((norm_bbox[2] + pad) * w))
+    y1 = min(h, int((norm_bbox[3] + pad) * h))
+    if x1 - x0 < 8 or y1 - y0 < 8:
+        return []
+
+    crop = bgr[y0:y1, x0:x1]
+    upscaled = cv2.resize(crop, None, fx=3.0, fy=3.0, interpolation=cv2.INTER_LANCZOS4)
+    blurred = cv2.GaussianBlur(upscaled, (0, 0), sigmaX=1.2)
+    sharpened = cv2.addWeighted(upscaled, 1.6, blurred, -0.6, 0)
+
+    words = _run_rapidocr(sharpened)
+    if not words:
+        words = _run_tesseract_fallback(sharpened)
     return words
 
 

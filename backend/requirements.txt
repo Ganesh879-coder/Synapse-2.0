@@ -6,7 +6,8 @@ sqlmodel==0.0.37
 psycopg[binary]>=3.2,<4
 pymupdf==2.1
 pillow==13.0.0
-numpy==2.5.5
+numpy==2.4.6; python_version < "3.12"
+numpy==2.5.5; python_version >= "3.12"
 opencv-python-headless==4.13.0.92
 scikit-image==0.26.0
 scipy==1.17.1

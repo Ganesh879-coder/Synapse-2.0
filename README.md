@@ -78,6 +78,19 @@ docker compose up --build -d
 - **Rotate Access Keys**: Add the new key to `KAVACH_API_KEYS` (`old,new`), restart, update clients, then remove the old key and restart again.
 - **Upgrade**: Pull the target release tag/branch, rebuild containers (`docker compose up --build -d`), and verify `/health` and `/ready`.
 
+## Deploying with Vercel (Frontend) + Render/Docker (Backend) + Supabase (Postgres)
+
+Because the backend bundles RapidOCR, ONNX Runtime, OpenCV, PyMuPDF, and scikit-image (exceeding Vercel's 250 MB serverless limit and requiring background worker threads), deploy the frontend on **Vercel** and the backend container on **Render** (or Railway / Fly.io):
+
+1. **Supabase (Database)**:
+   - Copy your Supabase Postgres connection string (Transaction Pooler port `6543` or Direct `5432`, with `?sslmode=require`).
+   - Set `DB_URL=postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?sslmode=require` on the backend service (`db.py` automatically normalizes `postgres://`/`postgresql://` to `postgresql+psycopg://` and disables prepared statements for PgBouncer).
+2. **Backend (Render via `render.yaml`)**:
+   - Deploy `kavach-backend` from `backend/Dockerfile` with `KAVACH_API_KEYS`, `DB_URL` (Supabase), and `CORS_ORIGINS=https://<your-app>.vercel.app`.
+3. **Frontend (Vercel)**:
+   - Import the repo in Vercel with **Root Directory** set to `frontend` (`frontend/vercel.json` configures Vite + SPA rewrites).
+   - Set `VITE_API_BASE=https://<your-backend-host>` (e.g. your Render URL) and redeploy.
+
 ## Known Limitations
 
 - Low-resolution `480x640` images can cause OCR character drops; unconfirmed GSTIN reads emit a `warn` rather than a hard checksum failure.

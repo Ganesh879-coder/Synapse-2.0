@@ -14,6 +14,7 @@ from PIL import Image, ImageDraw
 
 from app.api.jobs import AnalysisJobStore
 from app.config import Settings
+from app.db import normalize_db_url
 from app.main import create_app
 
 
@@ -193,3 +194,15 @@ def test_gitignore_and_dockerignore_exclude_sensitive_paths() -> None:
     for pattern in ("samples/", ".env", "*.db"):
         assert pattern in gi
         assert pattern in di
+
+
+def test_normalize_db_url_for_supabase_postgres() -> None:
+    assert (
+        normalize_db_url("postgres://user:pass@host:6543/postgres?sslmode=require")
+        == "postgresql+psycopg://user:pass@host:6543/postgres?sslmode=require"
+    )
+    assert (
+        normalize_db_url("postgresql://user:pass@host:5432/postgres")
+        == "postgresql+psycopg://user:pass@host:5432/postgres"
+    )
+    assert normalize_db_url("sqlite:////data/kavach.db") == "sqlite:////data/kavach.db"

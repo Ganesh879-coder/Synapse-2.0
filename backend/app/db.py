@@ -20,11 +20,28 @@ class AnalysisJobRow(SQLModel, table=True):
     updated_at: float = Field(index=True)
 
 
+def normalize_db_url(db_url: str) -> str:
+    """Normalize Postgres URLs (e.g., Supabase) to use the psycopg v3 driver."""
+    url = db_url.strip()
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://") :]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url[len("postgresql://") :]
+    return url
+
+
 def create_db_engine(db_url: str) -> Engine:
-    """Create SQLAlchemy/SQLModel engine (with SQLite WAL mode when applicable)."""
-    is_sqlite = db_url.startswith("sqlite")
-    connect_args = {"check_same_thread": False} if is_sqlite else {}
-    engine = create_engine(db_url, connect_args=connect_args, pool_pre_ping=True)
+    """Create SQLAlchemy/SQLModel engine (with SQLite WAL or Postgres pooler support)."""
+    normalized = normalize_db_url(db_url)
+    is_sqlite = normalized.startswith("sqlite")
+    if is_sqlite:
+        connect_args: dict[str, object] = {"check_same_thread": False}
+    elif normalized.startswith("postgresql+psycopg"):
+        # Disable server-side prepared statements for Supabase PgBouncer transaction pooler.
+        connect_args = {"prepare_threshold": None}
+    else:
+        connect_args = {}
+    engine = create_engine(normalized, connect_args=connect_args, pool_pre_ping=True)
     SQLModel.metadata.create_all(engine)
     if is_sqlite:
         with engine.connect() as conn:

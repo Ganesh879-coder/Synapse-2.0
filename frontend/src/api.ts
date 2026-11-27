@@ -6,7 +6,22 @@ import type {
 } from "./types/analysis";
 
 export const IS_MOCK_MODE = import.meta.env.VITE_MOCK === "1";
-export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
+const RAW_API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
+export const API_BASE = RAW_API_BASE.trim().replace(/\/+$/, "");
+
+const WAKEUP_ERROR_MESSAGE =
+  "The server may be waking up. Please wait 30 seconds and try again.";
+const WAKEUP_RETRY_DELAY_MS = 20_000;
+let hasCompletedApiRequest = false;
+
+export function apiUrl(path: string): string {
+  if (!path) return API_BASE;
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    return path;
+  }
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${API_BASE}${normalizedPath}`;
+}
 
 export const MAX_FILE_BYTES = 15 * 1024 * 1024;
 const ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".pdf"];
@@ -77,13 +92,43 @@ async function parseErrorResponse(response: Response): Promise<never> {
   throw new ApiError(message, response.status);
 }
 
+async function fetchWithWakeup(
+  path: string,
+  init?: RequestInit,
+  retryOnce = false
+): Promise<Response> {
+  const url = apiUrl(path);
+  try {
+    const response = await fetch(url, init);
+    hasCompletedApiRequest = true;
+    return response;
+  } catch (err) {
+    if (retryOnce) {
+      await new Promise((resolve) => setTimeout(resolve, WAKEUP_RETRY_DELAY_MS));
+      try {
+        const retryResponse = await fetch(url, init);
+        hasCompletedApiRequest = true;
+        return retryResponse;
+      } catch {
+        throw new ApiError(WAKEUP_ERROR_MESSAGE, 0);
+      }
+    }
+    if (err instanceof ApiError) throw err;
+    throw new ApiError(WAKEUP_ERROR_MESSAGE, 0);
+  }
+}
+
 export async function loginWithAccessKey(accessKey: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/api/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ access_key: accessKey.trim() }),
-  });
+  const response = await fetchWithWakeup(
+    "api/auth/login",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ access_key: accessKey.trim() }),
+    },
+    !hasCompletedApiRequest
+  );
   if (!response.ok) {
     await parseErrorResponse(response);
   }
@@ -94,12 +139,16 @@ export async function startAnalysis(file: File): Promise<AnalyzeQueuedResponse> 
   const formData = new FormData();
   formData.append("file", file);
 
-  const response = await fetch(`${API_BASE}/api/analyze`, {
-    method: "POST",
-    headers: authHeaders(),
-    credentials: "include",
-    body: formData,
-  });
+  const response = await fetchWithWakeup(
+    "api/analyze",
+    {
+      method: "POST",
+      headers: authHeaders(),
+      credentials: "include",
+      body: formData,
+    },
+    !hasCompletedApiRequest
+  );
   if (!response.ok) {
     await parseErrorResponse(response);
   }
@@ -107,7 +156,7 @@ export async function startAnalysis(file: File): Promise<AnalyzeQueuedResponse> 
 }
 
 export async function pollAnalysisStatus(docId: string): Promise<AnalysisStatusResponse> {
-  const response = await fetch(`${API_BASE}/api/analysis/${encodeURIComponent(docId)}`, {
+  const response = await fetchWithWakeup(`api/analysis/${encodeURIComponent(docId)}`, {
     headers: authHeaders(),
     credentials: "include",
   });
@@ -118,7 +167,7 @@ export async function pollAnalysisStatus(docId: string): Promise<AnalysisStatusR
 }
 
 export async function deleteAnalysis(docId: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/api/analysis/${encodeURIComponent(docId)}`, {
+  const response = await fetchWithWakeup(`api/analysis/${encodeURIComponent(docId)}`, {
     method: "DELETE",
     headers: authHeaders(),
     credentials: "include",
@@ -138,12 +187,13 @@ export async function loadMockFixture(sampleId: MockSampleId): Promise<AnalysisR
 
 export function resolveArtifactUrl(pathOrUrl: string): string {
   if (!pathOrUrl) return "";
-  if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
-    return pathOrUrl;
-  }
-  return `${API_BASE}${pathOrUrl}`;
+  return apiUrl(pathOrUrl);
+}
+
+export function getPageImageUrl(docId: string, pageNum = 1): string {
+  return apiUrl(`api/analysis/${encodeURIComponent(docId)}/page/${pageNum}`);
 }
 
 export function getReportPdfUrl(docId: string): string {
-  return `${API_BASE}/api/analysis/${encodeURIComponent(docId)}/report.pdf`;
+  return apiUrl(`api/analysis/${encodeURIComponent(docId)}/report.pdf`);
 }

@@ -11,6 +11,7 @@ import type { AnalysisResult, MockSampleId, PipelineStage } from "../types/analy
 export type AppPhase = "upload" | "analysing" | "result" | "error";
 
 const POLL_INTERVAL_MS = 1000;
+const FIRST_POLL_TIMEOUT_MS = 120_000;
 const POLL_TIMEOUT_MS = 90_000;
 const MOCK_STAGES: PipelineStage[] = ["reading", "numbers", "edits", "scoring"];
 
@@ -20,6 +21,7 @@ export function useAnalysis() {
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+  const hasCompletedFirstRef = useRef<boolean>(false);
 
   const reset = useCallback(() => {
     abortRef.current.cancelled = true;
@@ -87,13 +89,17 @@ export function useAnalysis() {
       setResult(null);
 
       try {
+        const pollTimeoutMs = hasCompletedFirstRef.current
+          ? POLL_TIMEOUT_MS
+          : FIRST_POLL_TIMEOUT_MS;
         const queued = await startAnalysis(file);
         const startedAt = Date.now();
 
         while (!token.cancelled) {
-          if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
+          if (Date.now() - startedAt > pollTimeoutMs) {
+            const timeoutSeconds = Math.round(pollTimeoutMs / 1000);
             throw new Error(
-              "The check is taking longer than expected (90s timeout). Please try again."
+              `The check is taking longer than expected (${timeoutSeconds}s timeout). Please try again.`
             );
           }
 
@@ -104,6 +110,7 @@ export function useAnalysis() {
             setStage(statusResp.stage);
           }
           if (statusResp.status === "done" && statusResp.result) {
+            hasCompletedFirstRef.current = true;
             setResult(statusResp.result);
             setPhase("result");
             return;

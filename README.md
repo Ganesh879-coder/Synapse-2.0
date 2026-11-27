@@ -88,8 +88,8 @@ Because the backend bundles RapidOCR, ONNX Runtime, OpenCV, PyMuPDF, and scikit-
 2. **Backend (Render via `render.yaml`)**:
    - Deploy `kavach-backend` from `backend/Dockerfile` with `KAVACH_API_KEYS`, `DB_URL` (Supabase), and `CORS_ORIGINS=https://<your-app>.vercel.app`.
 3. **Frontend (Vercel)**:
-   - Import the repo in Vercel with **Root Directory** set to `frontend` (`frontend/vercel.json` configures Vite + SPA rewrites).
-   - Set `VITE_API_BASE=https://<your-backend-host>` (e.g. your Render URL) and redeploy.
+   - Import the repo in Vercel with **Root Directory** set to `frontend` (`frontend/vercel.json` configures Vite + SPA rewrites; see `frontend/.env.example`).
+   - Set `VITE_API_BASE=https://<your-backend-host>` (e.g. your Render URL, no trailing slash) and redeploy. Local `npm run dev` keeps Vite's `/api` proxy when `VITE_API_BASE` is unset.
 
 ## Known Limitations
 

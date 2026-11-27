@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   deleteAnalysis,
+  getPageImageUrl,
   getReportPdfUrl,
   IS_MOCK_MODE,
 } from "./api";
@@ -72,7 +73,7 @@ export default function App() {
         page: 1,
         width: 700,
         height: 900,
-        image_url: `/api/analysis/${encodeURIComponent(result.doc_id)}/page/1`,
+        image_url: getPageImageUrl(result.doc_id, 1),
         heatmap_url: result.heatmap_url,
       },
     ];
